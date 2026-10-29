@@ -405,3 +405,13 @@ perfiles corriendo a la vez no se mezclen.
 ## Licencia
 
 MIT.
+
+## Convención de nombres de changes (OpenSpec)
+
+Los changes en este repo siguen la convención: **el nombre del change = la capability principal que introduce** (sustantivo, kebab-case).
+
+| Change | Capability principal | Qué significa |
+|---|---|---|
+| `playwright-runner` | `playwright-runner` | Es el *runner* que ejecuta Playwright (colección + ejecución + assets). El nombre refleja el **producto** que se entrega: un runner de Playwright. Las 3 capabilities que introduce (`test-collection`, `test-execution`, `run-artifacts`) giran en torno a **correr Playwright**. En OpenSpec el nombre del change suele coincidir con la *capability root* o el tema central del delta. |
+
+> **Regla práctica**: el nombre del change = sustantivo que nombra la capability principal (no verbos como `add-...` ni prefijos `feat-`). Sirve como clave de búsqueda en `openspec list`.
