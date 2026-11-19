@@ -70,7 +70,6 @@ router.get('/browse', async (req, res) => {
   }
 });
 
-// Busca un archivo .env dentro de projectPath (raíz primero, luego subcarpetas, prof. 2)
 function findEnvFile(projectPath, depth = 2) {
   if (!projectPath || !fs.existsSync(projectPath)) return null;
   try {
@@ -94,7 +93,6 @@ function findEnvFile(projectPath, depth = 2) {
   return null;
 }
 
-// GET /api/config/detect-env?projectPath=... → { path | null }
 router.get('/detect-env', (req, res) => {
   try {
     const projectPath = req.query.projectPath || '';
@@ -122,14 +120,18 @@ router.get('/', (req, res) => {
 
 router.post('/', (req, res) => {
   try {
-    const { projectPath, envPath, pytestCmd, txtFolderPath, seleniumRemoteUrl, errorImagesPath, jsonDataPath } = req.body;
+    const {
+      projectPath, envPath, playwrightCmd, pytestCmd,
+      txtFolderPath, seleniumRemoteUrl, errorImagesPath, jsonDataPath
+    } = req.body;
 
-    // Detectar cambio de proyecto ANTES de sobrescribir config
     let prevProjectPath = '';
     let prevTxtFolderPath = '';
     let prevSeleniumRemoteUrl = '';
     let prevErrorImagesPath = '';
     let prevJsonDataPath = '';
+    let prevPlaywrightCmd = '';
+    let prevPytestCmd = '';
     try {
       const prev = readConfig(req.profile.config);
       prevProjectPath = prev.projectPath || '';
@@ -137,21 +139,34 @@ router.post('/', (req, res) => {
       prevSeleniumRemoteUrl = prev.seleniumRemoteUrl || '';
       prevErrorImagesPath = prev.errorImagesPath || '';
       prevJsonDataPath = prev.jsonDataPath || '';
+      prevPlaywrightCmd = prev.playwrightCmd || '';
+      prevPytestCmd = prev.pytestCmd || 'pytest';
     } catch {}
+
+    if (pytestCmd && !playwrightCmd) {
+      console.warn('[config] `pytestCmd` está deprecado; usa `playwrightCmd` para proyectos Playwright.');
+    }
+
     const projectChanged = !samePath(prevProjectPath, projectPath);
 
     const updated = {
       projectPath,
       envPath,
-      pytestCmd: pytestCmd || 'pytest',
+      playwrightCmd: playwrightCmd !== undefined ? playwrightCmd : (prevPlaywrightCmd || ''),
+      pytestCmd: pytestCmd !== undefined ? pytestCmd : prevPytestCmd,
       txtFolderPath: txtFolderPath !== undefined ? txtFolderPath : prevTxtFolderPath,
       seleniumRemoteUrl: seleniumRemoteUrl !== undefined ? seleniumRemoteUrl : prevSeleniumRemoteUrl,
       errorImagesPath: errorImagesPath !== undefined ? errorImagesPath : prevErrorImagesPath,
       jsonDataPath: jsonDataPath !== undefined ? jsonDataPath : prevJsonDataPath
     };
+
+    // Compatibilidad: si no hay playwrightCmd definido, mantener comportamiento previo con pytestCmd
+    if (!updated.playwrightCmd && updated.pytestCmd) {
+      // se permite; rutas resolverán el comando con tolerancia
+    }
+
     writeConfig(req.profile.config, updated);
 
-    // Proyecto distinto → reiniciar analítica/historial (pertenecen al anterior)
     let reset = null;
     if (projectChanged && prevProjectPath) {
       reset = resetProjectData(req.profile.reportsDir, req.profile.collection);
@@ -165,7 +180,10 @@ router.post('/', (req, res) => {
 
 router.post('/validate', (req, res) => {
   try {
-    const { projectPath } = req.body;
+    const { projectPath, playwrightCmd, pytestCmd } = req.body;
+    if (pytestCmd && !playwrightCmd) {
+      console.warn('[config] `pytestCmd` está deprecado; migra a `playwrightCmd`.');
+    }
     if (!projectPath) return res.json({ valid: false, reason: 'No path provided' });
     if (!fs.existsSync(projectPath)) return res.json({ valid: false, reason: 'Path does not exist' });
 
@@ -173,13 +191,14 @@ router.post('/validate', (req, res) => {
     if (!stat.isDirectory()) return res.json({ valid: false, reason: 'Path is not a directory' });
 
     const contents = fs.readdirSync(projectPath);
-    const hasTests = contents.some(f =>
+    const hasPlaywright = contents.some(f => /^playwright\.config\.(t|j)sx?$|^playwright\.config\.mjs$|^playwright\.config\.cjs$/i.test(f));
+    const hasPytest = contents.some(f =>
       f === 'pytest.ini' || f === 'conftest.py' || f === 'setup.cfg' ||
       f === 'pyproject.toml' || f.startsWith('test_') || f.endsWith('_test.py')
     );
 
-    if (!hasTests) {
-      return res.json({ valid: false, reason: 'No pytest markers found (pytest.ini, conftest.py, test_*.py)' });
+    if (!hasPlaywright && !hasPytest) {
+      return res.json({ valid: false, reason: 'No se encontraron marcadores de proyecto (playwright.config.* o pytest.ini/conftest.py/test_*.py)' });
     }
     res.json({ valid: true });
   } catch (e) {

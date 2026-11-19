@@ -274,14 +274,19 @@ router.get('/install-status', (req, res) => {
 
 router.post('/apply', (req, res) => {
   try {
-    const { projectPath, pytestCmd } = req.body;
+    const { projectPath, pytestCmd, playwrightCmd } = req.body;
     const config = readConfig(req);
 
     const prevProjectPath = config.projectPath || '';
     const projectChanged = !samePath(prevProjectPath, projectPath);
 
     config.projectPath = projectPath;
-    config.pytestCmd = pytestCmd;
+    if (playwrightCmd !== undefined) config.playwrightCmd = playwrightCmd;
+    if (pytestCmd !== undefined) config.pytestCmd = pytestCmd;
+    if (!config.playwrightCmd && !config.pytestCmd) config.pytestCmd = 'pytest';
+    if (pytestCmd && !playwrightCmd) {
+      console.warn('[automation] `pytestCmd` está deprecado; usa `playwrightCmd` para proyectos Playwright.');
+    }
     writeConfig(req, config);
 
     let reset = null;

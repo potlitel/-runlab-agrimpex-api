@@ -2,14 +2,24 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { collectTests } = require('../services/testCollector');
-const { runTests, abortExecution, isRunning } = require('../services/pytestRunner');
+const { collectTests, getCached, setCached } = require('../services/playwrightCollector');
+const { runTests, abortExecution, isRunning } = require('../services/playwrightRunner');
 const { readEnv } = require('../services/envManager');
 const { getEntorno } = require('../services/profileManager');
 const { ensureGrid } = require('../services/dockerRunner');
 
 function getConfig(req) {
   return JSON.parse(fs.readFileSync(req.profile.config, 'utf-8'));
+}
+
+function getRunnerCmd(cfg) {
+  // playwrightCmd preferido; pytestCmd deprecado (lectura tolerante)
+  if (cfg && cfg.playwrightCmd) return cfg.playwrightCmd;
+  if (cfg && cfg.pytestCmd) {
+    console.warn('[config] `pytestCmd` está deprecado; migra a `playwrightCmd`.');
+    return cfg.pytestCmd;
+  }
+  return 'npx playwright';
 }
 
 function resolveEnvVars(req, entornoName, envFile, projectPath) {
@@ -28,35 +38,48 @@ function resolveEnvVars(req, entornoName, envFile, projectPath) {
   return {};
 }
 
-// Returns last collection from disk (fast — no pytest re-run)
+// Returns last collection from memory or disk (fast — no CLI re-run)
 router.get('/cached', (req, res) => {
+  const mem = getCached(req.profile.id);
+  if (mem) return res.json(mem);
+
   const cachePath = req.profile.collection;
-  if (!fs.existsSync(cachePath)) return res.json({ files: {}, total: 0, timestamp: null });
+  if (!fs.existsSync(cachePath)) return res.json({ files: {}, total: 0, timestamp: null, projects: [] });
   try {
-    res.json(JSON.parse(fs.readFileSync(cachePath, 'utf-8')));
+    const data = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+    if (!data.projects) data.projects = [];
+    setCached(req.profile.id, data);
+    res.json(data);
   } catch {
-    res.json({ files: {}, total: 0, timestamp: null });
+    res.json({ files: {}, total: 0, timestamp: null, projects: [] });
   }
 });
 
 router.get('/collect', async (req, res) => {
   try {
-    const { projectPath, pytestCmd } = getConfig(req);
+    const cfg = getConfig(req);
+    const { projectPath } = cfg;
+    const runnerCmd = getRunnerCmd(cfg);
     if (!projectPath) return res.status(400).json({ error: 'Project path not configured' });
-    const result = await collectTests(projectPath, pytestCmd);
+    const result = await collectTests(projectPath, runnerCmd);
 
-    // Persist collection so analytics can cross-reference unexecuted tests
+    const payload = {
+      timestamp: new Date().toISOString(),
+      files: result.files,
+      total: result.total || 0,
+      projects: result.projects || [],
+      ...(result.errorFiles ? { errorFiles: result.errorFiles } : {})
+    };
+
+    // Caché en memoria y en disco
+    setCached(req.profile.id, payload);
     try {
       const dataDir = req.profile.dataDir;
       if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(
-        req.profile.collection,
-        JSON.stringify({ timestamp: new Date().toISOString(), files: result.files, total: result.total || 0 }),
-        'utf-8'
-      );
+      fs.writeFileSync(req.profile.collection, JSON.stringify(payload, null, 2), 'utf-8');
     } catch {}
 
-    res.json(result);
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ error: e.message, raw: e.raw || '' });
   }
@@ -65,20 +88,19 @@ router.get('/collect', async (req, res) => {
 router.post('/run', async (req, res) => {
   try {
     if (isRunning(req.profile.id)) return res.status(409).json({ error: 'Execution already in progress' });
-    const { testIds, profileName, envFile, useDocker, params, paramsByTest } = req.body;
+    const { testIds, profileName, envFile, useDocker, params, paramsByTest, project, grep, workers } = req.body;
     if (!testIds || !testIds.length) return res.status(400).json({ error: 'No tests selected' });
-    const { projectPath, pytestCmd, seleniumRemoteUrl, envPath } = getConfig(req);
+    const cfg = getConfig(req);
+    const { projectPath, seleniumRemoteUrl, envPath } = cfg;
+    const runnerCmd = getRunnerCmd(cfg);
     if (!projectPath) return res.status(400).json({ error: 'Project path not configured' });
+
     let envVars = resolveEnvVars(req, profileName, envFile, projectPath);
-    // Sin perfil/envFile explícito: usa el .env configurado como base, así los
-    // params vacíos del modal caen al valor real del .env del proyecto.
     if (Object.keys(envVars).length === 0 && envPath && fs.existsSync(envPath)) {
       envVars = Object.fromEntries(
         readEnv(envPath).filter(v => !v.isComment && v.key).map(v => [v.key, v.value])
       );
     }
-    // Overrides puntuales del usuario (modal de ejecución). Solo valores no vacíos
-    // pisan al .env/perfil; lo vacío deja que el test use su valor del .env.
     if (params && typeof params === 'object') {
       for (const [k, v] of Object.entries(params)) {
         if (k && v !== undefined && v !== null && String(v).trim() !== '') {
@@ -86,13 +108,9 @@ router.post('/run', async (req, res) => {
         }
       }
     }
-    // Grid Selenium: inyecta SELENIUM_REMOTE_URL para que conftest use webdriver.Remote.
-    // Vacío => conftest cae a Chrome local.
     if (seleniumRemoteUrl) envVars.SELENIUM_REMOTE_URL = seleniumRemoteUrl;
     const io = req.app.get('io');
 
-    // Docker: si se pidió, levanta el grid Selenium y espera healthcheck ANTES de
-    // correr los tests. Si falla (Docker cerrado, etc.) aborta con error claro.
     if (useDocker && seleniumRemoteUrl) {
       io.to(`profile:${req.profile.id}`).emit('execution:preparing', { message: 'Iniciando Selenium en Docker (esperando healthcheck)...' });
       try {
@@ -103,7 +121,6 @@ router.post('/run', async (req, res) => {
       }
     }
 
-    // Sanea paramsByTest: { testId: { KEY: 'val' } } solo con valores no vacíos.
     const cleanPerTest = {};
     if (paramsByTest && typeof paramsByTest === 'object') {
       for (const [id, kv] of Object.entries(paramsByTest)) {
@@ -116,8 +133,13 @@ router.post('/run', async (req, res) => {
       }
     }
 
-    runTests(io, req.profile.id, testIds, projectPath, pytestCmd, envVars, cleanPerTest, req.profile.reportsDir);
-    res.json({ success: true, message: `Starting ${testIds.length} tests sequentially` });
+    const options = {};
+    if (project) options.project = project;
+    if (grep) options.grep = grep;
+    if (workers) options.workers = workers;
+
+    runTests(io, req.profile.id, testIds, projectPath, runnerCmd, envVars, cleanPerTest, req.profile.reportsDir, options);
+    res.json({ success: true, message: `Starting ${testIds.length} tests` });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

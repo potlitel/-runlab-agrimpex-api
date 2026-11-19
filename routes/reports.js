@@ -152,6 +152,24 @@ router.get('/analytics', (req, res) => {
   }
 });
 
+router.get('/:id/assets/*', (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const relPath = req.params[0] || '';
+    const assetsRoot = path.resolve(req.profile.reportsDir, reportId, 'assets');
+    const fullPath = path.resolve(assetsRoot, relPath);
+    if (!fullPath.startsWith(assetsRoot + path.sep) && fullPath !== assetsRoot) {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+    res.sendFile(fullPath);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', (req, res) => {
   try {
     const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);

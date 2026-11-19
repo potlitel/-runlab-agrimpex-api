@@ -1,7 +1,8 @@
 {
-  "projectPath": "",
-  "envPath": "",
-  "pytestCmd": ".\\venv\\Scripts\\pytest.exe",
+  "projectPath": "C:\\ruta\\a\\tu\\proyecto\\de\\automatizacion",
+  "envPath": "C:\\ruta\\a\\tu\\proyecto\\.env",
+  "playwrightCmd": "npx playwright",
+  "pytestCmd": "pytest",
   "txtFolderPath": "",
   "seleniumRemoteUrl": "",
   "errorImagesPath": "",

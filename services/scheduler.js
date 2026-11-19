@@ -1,6 +1,6 @@
 const fs = require('fs');
 const { readEnv } = require('./envManager');
-const { runTests, isRunning } = require('./pytestRunner');
+const { runTests, isRunning } = require('./playwrightRunner');
 const { ensureGrid } = require('./dockerRunner');
 const pm = require('./profileManager');
 
@@ -46,6 +46,15 @@ function emitLog(activeIo, profileId, message, type = 'info') {
   console.log('[scheduler]', profileId, message);
 }
 
+function getRunnerCmd(cfg) {
+  if (cfg && cfg.playwrightCmd) return cfg.playwrightCmd;
+  if (cfg && cfg.pytestCmd) {
+    console.warn('[scheduler] `pytestCmd` está deprecado; migra a `playwrightCmd`.');
+    return cfg.pytestCmd;
+  }
+  return 'npx playwright';
+}
+
 // Entorno del subprocess: .env base + grid + params de la programación.
 function buildEnv(cfg, schedule) {
   let env = {};
@@ -63,8 +72,6 @@ function buildEnv(cfg, schedule) {
   return env;
 }
 
-// Dispara una programación de un perfil (paths). Si ese perfil ya corre, se
-// omite (no pisa su sesión), pero OTROS perfiles pueden correr en paralelo.
 async function trigger(schedule, paths, ioOverride) {
   const activeIo = ioOverride || io;
   const pid = paths.id;
@@ -86,6 +93,7 @@ async function trigger(schedule, paths, ioOverride) {
   const repeat = Math.max(1, schedule.repeat || 1);
   const testIds = Array.from({ length: repeat }, () => base).flat();
   const env = buildEnv(cfg, schedule);
+  const runnerCmd = getRunnerCmd(cfg);
 
   if (schedule.useDocker && cfg.seleniumRemoteUrl) {
     emitLog(activeIo, pid, `"${schedule.name}": levantando Selenium en Docker...`);
@@ -93,7 +101,6 @@ async function trigger(schedule, paths, ioOverride) {
     catch (e) { emitLog(activeIo, pid, `"${schedule.name}": Docker falló — ${e.message}`, 'error'); }
   }
 
-  // Sella lastRun.
   const list = loadFrom(paths.schedules);
   const item = list.find(x => x.id === schedule.id);
   if (item) { item.lastRun = new Date().toISOString(); saveTo(paths.schedules, list); }
@@ -101,12 +108,10 @@ async function trigger(schedule, paths, ioOverride) {
   emitLog(activeIo, pid, `▶ Ejecutando programación "${schedule.name}" (${testIds.length} test${testIds.length !== 1 ? 's' : ''})`, 'success');
   if (activeIo) activeIo.to(`profile:${pid}`).emit('schedule:run', { id: schedule.id, name: schedule.name, total: testIds.length, profileId: pid });
 
-  runTests(activeIo, pid, testIds, cfg.projectPath, cfg.pytestCmd, env, schedule.paramsByTest || {}, paths.reportsDir);
+  runTests(activeIo, pid, testIds, cfg.projectPath, runnerCmd, env, schedule.paramsByTest || {}, paths.reportsDir);
   return { ok: true };
 }
 
-// Tick: una vez por minuto, recorre TODOS los perfiles y lanza las
-// programaciones cuyo HH:MM y día coinciden. Perfiles corren en paralelo.
 function tick() {
   const now = new Date();
   const minuteKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;

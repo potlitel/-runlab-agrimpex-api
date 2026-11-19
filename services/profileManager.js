@@ -6,7 +6,7 @@ const PROFILES_DIR = path.join(DATA_DIR, 'profiles');
 const INDEX_PATH = path.join(PROFILES_DIR, 'index.json');
 
 const DEFAULT_CONFIG = {
-  projectPath: '', envPath: '', pytestCmd: 'pytest',
+  projectPath: '', envPath: '', playwrightCmd: 'npx playwright', pytestCmd: 'pytest',
   txtFolderPath: '', seleniumRemoteUrl: '', errorImagesPath: '', jsonDataPath: '',
 };
 const DEFAULT_FEATURES = {
