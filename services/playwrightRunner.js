@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const runtime = require('./runtimeRegistry');
 
@@ -177,6 +178,133 @@ function flattenJsonReport(json, projectPath) {
   return tests;
 }
 
+const PLAYWRIGHT_CONFIG_FILES = [
+  'playwright.config.ts',
+  'playwright.config.mts',
+  'playwright.config.cts',
+  'playwright.config.js',
+  'playwright.config.mjs',
+  'playwright.config.cjs',
+];
+
+function findPlaywrightConfig(projectPath) {
+  if (!projectPath) return null;
+  for (const name of PLAYWRIGHT_CONFIG_FILES) {
+    const full = path.join(projectPath, name);
+    try {
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) return full;
+    } catch {}
+  }
+  return null;
+}
+
+function mapScreenshotMode(mode) {
+  if (mode === 'always') return 'on';
+  if (mode === 'only-on-failure') return 'only-on-failure';
+  if (mode === 'off') return 'off';
+  return null;
+}
+
+function buildEvidenceUseOverride(evidence) {
+  if (!evidence || typeof evidence !== 'object') return null;
+  const use = {};
+  const screenshotMode = mapScreenshotMode(evidence.screenshot);
+  if (screenshotMode) {
+    if (evidence.fullPage && screenshotMode !== 'off') {
+      use.screenshot = { mode: screenshotMode, fullPage: true };
+    } else {
+      use.screenshot = screenshotMode;
+    }
+  }
+  if (typeof evidence.video === 'string' && ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.video)) {
+    use.video = evidence.video;
+  }
+  if (typeof evidence.trace === 'string' && ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.trace)) {
+    use.trace = evidence.trace;
+  }
+  return Object.keys(use).length ? use : null;
+}
+
+function createEvidenceConfigOverride(projectPath, evidence) {
+  const useOverride = buildEvidenceUseOverride(evidence);
+  if (!useOverride) return null;
+  const configPath = findPlaywrightConfig(projectPath);
+  if (!configPath) return null;
+
+  const ext = path.extname(configPath).toLowerCase();
+  const configDir = path.dirname(path.resolve(configPath));
+  // Usar nombre relativo desde el mismo directorio para preservar resolución de rutas relativas del config base.
+  const baseName = path.basename(configPath);
+  const jsonOverride = JSON.stringify(useOverride);
+  let wrapperExt = '.cjs';
+  let content = '';
+
+  if (ext === '.mjs') {
+    wrapperExt = '.mjs';
+    content = `import baseConfig from ${JSON.stringify('./' + baseName)};\nconst base = baseConfig && baseConfig.default ? baseConfig.default : baseConfig;\nconst override = ${jsonOverride};\nexport default { ...base, use: { ...(base && base.use ? base.use : {}), ...override } };\n`;
+  } else if (ext === '.ts' || ext === '.mts' || ext === '.cts') {
+    wrapperExt = ext;
+    content = `import baseConfig from ${JSON.stringify('./' + baseName)};\nconst base: any = (baseConfig as any)?.default ?? baseConfig;\nconst override = ${jsonOverride} as any;\nexport default { ...base, use: { ...(base?.use || {}), ...override } };\n`;
+  } else {
+    wrapperExt = '.cjs';
+    content = `const baseConfig = require(${JSON.stringify('./' + baseName)});\nconst base = baseConfig && baseConfig.default ? baseConfig.default : baseConfig;\nconst override = ${jsonOverride};\nmodule.exports = { ...base, use: { ...(base && base.use ? base.use : {}), ...override } };\n`;
+  }
+
+  const wrapperPath = path.join(configDir, `.playwright.config.runlab-override.${Date.now()}${wrapperExt}`);
+  fs.writeFileSync(wrapperPath, content, 'utf-8');
+  return wrapperPath;
+}
+
+function toAssetPath(attachmentPath, projectPath, runAssetsDir) {
+  if (!attachmentPath) return null;
+  const abs = path.resolve(String(attachmentPath));
+  const candidates = [
+    { base: path.join(projectPath, 'test-results'), prefix: 'test-results' },
+    { base: path.join(projectPath, 'playwright-report'), prefix: 'playwright-report' },
+  ];
+  for (const c of candidates) {
+    const baseAbs = path.resolve(c.base);
+    if (abs === baseAbs || abs.startsWith(baseAbs + path.sep)) {
+      const rel = path.join(c.prefix, path.relative(baseAbs, abs)).replace(/\\/g, '/');
+      const copied = path.join(runAssetsDir, rel);
+      try {
+        if (fs.existsSync(copied)) return rel;
+      } catch {}
+      return rel;
+    }
+  }
+  // Fallback: if already inside runAssetsDir
+  const assetsAbs = path.resolve(runAssetsDir);
+  if (abs === assetsAbs || abs.startsWith(assetsAbs + path.sep)) {
+    return path.relative(assetsAbs, abs).replace(/\\/g, '/');
+  }
+  return null;
+}
+
+function isImageAttachment(att) {
+  if (!att) return false;
+  const ct = String(att.contentType || '').toLowerCase();
+  if (ct.startsWith('image/')) return true;
+  const name = String(att.name || '').toLowerCase();
+  return name.includes('screenshot') || /\.(png|jpe?g|gif|webp)$/i.test(String(att.path || ''));
+}
+
+function normalizeReportAssets(report, projectPath, runAssetsDir) {
+  let previewImage = null;
+  for (const test of (report.tests || [])) {
+    if (!Array.isArray(test.attachments)) continue;
+    for (const att of test.attachments) {
+      const assetPath = toAssetPath(att.path, projectPath, runAssetsDir);
+      if (assetPath) att.assetPath = assetPath;
+      if (!previewImage && assetPath && isImageAttachment(att)) {
+        previewImage = assetPath;
+      }
+    }
+  }
+  if (!report.summary || typeof report.summary !== 'object') report.summary = {};
+  report.summary.previewImage = previewImage;
+}
+
 function deriveSummary(tests, jsonStats, durationSec) {
   const passed = tests.filter(t => t.status === 'passed').length;
   const failed = tests.filter(t => t.status === 'failed').length;
@@ -203,8 +331,20 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
   const ids = Array.isArray(testIds) ? testIds : [];
   emit(io, profileId, 'execution:started', { total: ids.length });
 
+  let overrideConfigPath = null;
+  const evidence = options && options.evidence;
+  if (evidence) {
+    try {
+      overrideConfigPath = createEvidenceConfigOverride(projectPath, evidence);
+    } catch (e) {
+      // No bloquear ejecución si falla el override; se usará config del proyecto.
+      console.warn('[playwrightRunner] No se pudo aplicar override de evidencias:', e && e.message ? e.message : e);
+      overrideConfigPath = null;
+    }
+  }
+
   const { cmd, baseArgs } = resolveCmd(playwrightCmd);
-  const args = buildArgs(baseArgs, ids, paramsByTest, options);
+  const args = buildArgs(baseArgs, ids, paramsByTest, options, overrideConfigPath);
 
   let lineBuffer = '';
   let completedSeen = 0;
@@ -274,15 +414,20 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
   const summary = deriveSummary(tests, json && json.stats, totalDuration);
 
   const report = { id: reportId, timestamp: new Date().toISOString(), summary, tests };
-  safeMkdir(reportsDir);
-  fs.writeFileSync(path.join(reportsDir, `${reportId}.json`), JSON.stringify(report, null, 2));
 
   // Copiar assets de Playwright (HTML report y test-results) al workspace del run.
   try { copyDirSync(path.join(projectPath, 'playwright-report'), path.join(runAssetsDir, 'playwright-report')); } catch {}
   try { copyDirSync(path.join(projectPath, 'test-results'), path.join(runAssetsDir, 'test-results')); } catch {}
 
-  // Limpieza de archivo temporal de resultados JSON
+  // Normalizar adjuntos a rutas de assets servibles y calcular imagen de preview del reporte.
+  try { normalizeReportAssets(report, projectPath, runAssetsDir); } catch {}
+
+  safeMkdir(reportsDir);
+  fs.writeFileSync(path.join(reportsDir, `${reportId}.json`), JSON.stringify(report, null, 2));
+
+  // Limpieza de archivos temporales
   try { if (fs.existsSync(jsonOutPath)) fs.unlinkSync(jsonOutPath); } catch {}
+  try { if (overrideConfigPath && fs.existsSync(overrideConfigPath)) fs.unlinkSync(overrideConfigPath); } catch {}
 
   if (s.aborted) {
     emit(io, profileId, 'execution:aborted', { reportId, completed: completedSeen, total: ids.length, summary });
@@ -297,8 +442,13 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
   return { reportId, summary, tests };
 }
 
-function buildArgs(baseArgs, testIds, paramsByTest, options = {}) {
+function buildArgs(baseArgs, testIds, paramsByTest, options = {}, overrideConfigPath = null) {
   const args = [...baseArgs, 'test'];
+
+  if (overrideConfigPath) {
+    args.push('-c', overrideConfigPath);
+  }
+
   // Selección: paths/ids. Si vienen como "file::title", pasamos el archivo como target.
   const targets = [];
   for (const id of (testIds || [])) {

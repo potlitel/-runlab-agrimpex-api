@@ -138,8 +138,39 @@ curl -H "X-Profile-Id: perfil-1" http://localhost:3001/api/config
 | `txtFolderPath` | Carpeta de datos `.txt` (módulo `txtData`) |
 | `jsonDataPath` | Carpeta de datos JSON (módulo `jsonData`) |
 | `errorImagesPath` | Carpeta de evidencias de error (módulo `errorImages`) |
+| `evidence` | (Opcional) Configuración de evidencias de ejecución Playwright; ver detalle abajo |
 
 Ejemplos de referencia: `config.example.json`, `automation-config.example.json`.
+
+#### Evidencias de ejecución (Playwright) y foto por reporte
+
+Permite controlar la captura de evidencias por perfil y disponer de una imagen de vista previa por reporte en el historial (independiente de si la prueba pasó o falló), configurable desde **Ajustes > Proyecto y rutas > Evidencias de ejecución (Playwright)** en la UI.
+
+**Configuración (`config.evidence`):**
+
+| Campo | Valores | Descripción |
+|---|---|---|
+| `screenshot` | `always` \| `only-on-failure` \| `off` | Política de capturas. `always` fuerza captura en todos los tests (incluidos pasados). Si no se define, se respeta el `playwright.config` del proyecto. |
+| `video` | `on` \| `off` \| `retain-on-failure` \| `on-first-retry` | Grabación de video. |
+| `trace` | `on` \| `off` \| `retain-on-failure` \| `on-first-retry` | Captura de trazas. |
+| `fullPage` | `boolean` | Si es `true` y la captura de screenshots está activa, se usa screenshot de página completa (`fullPage`). |
+
+- **`POST /api/config`** acepta, normaliza y persiste `evidence` en la config del perfil (omitirlo o dejar sin campos efectivos conserva/limpia según corresponda, manteniendo compatibilidad con configs previas).
+- **`routes/tests.js`** pasa `cfg.evidence` en las opciones de ejecución a `runTests`.
+
+**Override de ejecución (runner):**
+- `services/playwrightRunner.js` detecta el archivo de configuración Playwright del proyecto (`playwright.config.{ts,mts,cts,js,mjs,cjs}`).
+- Cuando hay opciones de evidencia, genera un **config temporal de override** que extiende el config del proyecto y aplica un merge de `use` (`screenshot`, `video`, `trace`), ejecutando con `-c <override>`.
+- Mapeos relevantes: `screenshot: 'always'` → Playwright `screenshot: 'on'`; con `fullPage` activo se emite `screenshot: { mode, fullPage: true }` (cuando la captura no está desactivada).
+- El override y el JSON temporal se limpian al finalizar la corrida. Si no puede aplicarse el override, la ejecución continúa con la configuración del proyecto.
+
+**Normalización de assets y vista previa:**
+- Tras copiar `playwright-report/` y `test-results/` a `profiles/<id>/reports/<runId>/assets/`, el runner normaliza adjuntos de cada test agregando `assetPath` relativo (servible por la API) cuando el archivo existe en los assets del run.
+- Se calcula `summary.previewImage` como la ruta relativa (`assetPath`) de la primera imagen disponible entre los adjuntos, y se persiste en `reports/<runId>.json`.
+- `GET /api/reports` devuelve el `summary` almacenado (incluyendo `previewImage` cuando existe), lo que permite a la UI mostrar una miniatura por ítem en el **Historial de ejecuciones**.
+- Los assets (incluida la imagen de vista previa y evidencias por test) se sirven vía `GET /api/reports/:id/assets/*`.
+
+> **Nota:** el override realiza merge de `use` a nivel top-level del config importado. En proyectos que redefinan `screenshot`/`video`/`trace` dentro de `projects[].use`, puede ser necesario ajustar la estrategia de merge para ese caso. Reportes históricos sin `previewImage`/`assetPath` siguen siendo compatibles (la UI muestra un placeholder cuando no hay imagen).
 
 ---
 
@@ -231,9 +262,10 @@ Orquesta corridas Playwright y emite progreso en vivo.
 - **Aborto:** `POST /api/tests/abort` → termina proceso hijo (SIGTERM/taskkill) y emite `execution:aborted`.
 
 ### 5) Reportes y artefactos (`run-artifacts`)
-- **Reporte JSON:** `profiles/<id>/reports/<runId>.json` con `{ id, timestamp, summary, tests[] }` (summary: total/passed/failed/errors/skipped/duration).
+- **Reporte JSON:** `profiles/<id>/reports/<runId>.json` con `{ id, timestamp, summary, tests[] }` (summary: `total`, `passed`, `failed`, `errors`, `skipped`, `duration` y, cuando aplica, `previewImage`).
 - **Assets Playwright:** copia de `playwright-report/` y `test-results/` del proyecto a `profiles/<id>/reports/<runId>/assets/`.
-- **Servicio de assets:** `GET /api/reports/:id/assets/*` (HTML report, traces, screenshots, videos). Rutas de descarga HTML/JSON disponibles en `/api/reports/:id/download/*`.
+- **Normalización y vista previa:** el runner intenta asignar `assetPath` relativo a los adjuntos servibles y calcula `summary.previewImage` (primera imagen disponible) para mostrar una foto por reporte en el historial, independientemente del resultado (si la captura está habilitada, p.ej. `evidence.screenshot='always'`).
+- **Servicio de assets:** `GET /api/reports/:id/assets/*` (HTML report, traces, screenshots, videos e imágenes de evidencia). Rutas de descarga HTML/JSON disponibles en `/api/reports/:id/download/*`.
 - **Analítica:** `GET /api/reports/analytics` agrega historial y cruza con la última colección cacheada.
 
 ### 6) Entornos y variables (`variables`)
@@ -878,7 +910,8 @@ flowchart LR
     "failed": 1,
     "errors": 0,
     "skipped": 0,
-    "duration": 12.34
+    "duration": 12.34,
+    "previewImage": "test-results/login-Login-inicia-sesión-con-credenciales-válidas-chromium/test-finished-1.png"
   },
   "tests": [
     {
@@ -887,7 +920,14 @@ flowchart LR
       "duration": 3.21,
       "output": "",
       "errorMsg": "",
-      "attachments": [],
+      "attachments": [
+        {
+          "name": "screenshot",
+          "contentType": "image/png",
+          "path": "/abs/path/proyecto/test-results/.../test-finished-1.png",
+          "assetPath": "test-results/login-Login-inicia-sesión-con-credenciales-válidas-chromium/test-finished-1.png"
+        }
+      ],
       "project": "chromium"
     },
     {
@@ -897,13 +937,15 @@ flowchart LR
       "output": "",
       "errorMsg": "Error: expect(...)\n[flaky]",
       "attachments": [
-        { "name": "trace", "contentType": "application/zip", "path": "test-results/.../trace.zip" }
+        { "name": "trace", "contentType": "application/zip", "path": "test-results/.../trace.zip", "assetPath": "test-results/.../trace.zip" }
       ],
       "project": "chromium"
     }
   ]
 }
 ```
+
+> `summary.previewImage` y `assetPath` se generan cuando el runner puede mapear adjuntos a assets copiados del run. La UI consume `previewImage` para la miniatura del historial y `assetPath` para mostrar evidencias por test (servidas por `/api/reports/:id/assets/*`). Los adjuntos de reportes históricos pueden no incluir `assetPath`.
 
 ### A.5 Estructura de datos por perfil (mapa)
 

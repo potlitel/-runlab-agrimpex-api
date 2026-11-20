@@ -222,7 +222,8 @@ router.post('/', (req, res) => {
   try {
     const {
       projectPath, envPath, playwrightCmd, pytestCmd,
-      txtFolderPath, seleniumRemoteUrl, errorImagesPath, jsonDataPath
+      txtFolderPath, seleniumRemoteUrl, errorImagesPath, jsonDataPath,
+      evidence
     } = req.body;
 
     let prevProjectPath = '';
@@ -232,15 +233,18 @@ router.post('/', (req, res) => {
     let prevJsonDataPath = '';
     let prevPlaywrightCmd = '';
     let prevPytestCmd = '';
+    let prevEvidence = undefined;
+    let prevConfig = {};
     try {
-      const prev = readConfig(req.profile.config);
-      prevProjectPath = prev.projectPath || '';
-      prevTxtFolderPath = prev.txtFolderPath || '';
-      prevSeleniumRemoteUrl = prev.seleniumRemoteUrl || '';
-      prevErrorImagesPath = prev.errorImagesPath || '';
-      prevJsonDataPath = prev.jsonDataPath || '';
-      prevPlaywrightCmd = prev.playwrightCmd || '';
-      prevPytestCmd = prev.pytestCmd || 'pytest';
+      prevConfig = readConfig(req.profile.config) || {};
+      prevProjectPath = prevConfig.projectPath || '';
+      prevTxtFolderPath = prevConfig.txtFolderPath || '';
+      prevSeleniumRemoteUrl = prevConfig.seleniumRemoteUrl || '';
+      prevErrorImagesPath = prevConfig.errorImagesPath || '';
+      prevJsonDataPath = prevConfig.jsonDataPath || '';
+      prevPlaywrightCmd = prevConfig.playwrightCmd || '';
+      prevPytestCmd = prevConfig.pytestCmd || 'pytest';
+      prevEvidence = prevConfig.evidence;
     } catch {}
 
     if (pytestCmd && !playwrightCmd) {
@@ -248,6 +252,20 @@ router.post('/', (req, res) => {
     }
 
     const projectChanged = !samePath(prevProjectPath, projectPath);
+
+    const normalizedEvidence = evidence && typeof evidence === 'object' ? {
+      screenshot: ['always', 'only-on-failure', 'off'].includes(evidence.screenshot) ? evidence.screenshot : (prevEvidence && prevEvidence.screenshot),
+      video: ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.video) ? evidence.video : (prevEvidence && prevEvidence.video),
+      trace: ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.trace) ? evidence.trace : (prevEvidence && prevEvidence.trace),
+      fullPage: typeof evidence.fullPage === 'boolean' ? evidence.fullPage : (prevEvidence && typeof prevEvidence.fullPage === 'boolean' ? prevEvidence.fullPage : undefined),
+    } : (evidence === null ? undefined : prevEvidence);
+
+    // Remove undefined keys from evidence
+    let finalEvidence = normalizedEvidence;
+    if (finalEvidence && typeof finalEvidence === 'object') {
+      finalEvidence = Object.fromEntries(Object.entries(finalEvidence).filter(([, v]) => v !== undefined));
+      if (Object.keys(finalEvidence).length === 0) finalEvidence = undefined;
+    }
 
     const updated = {
       projectPath,
@@ -257,7 +275,8 @@ router.post('/', (req, res) => {
       txtFolderPath: txtFolderPath !== undefined ? txtFolderPath : prevTxtFolderPath,
       seleniumRemoteUrl: seleniumRemoteUrl !== undefined ? seleniumRemoteUrl : prevSeleniumRemoteUrl,
       errorImagesPath: errorImagesPath !== undefined ? errorImagesPath : prevErrorImagesPath,
-      jsonDataPath: jsonDataPath !== undefined ? jsonDataPath : prevJsonDataPath
+      jsonDataPath: jsonDataPath !== undefined ? jsonDataPath : prevJsonDataPath,
+      ...(finalEvidence ? { evidence: finalEvidence } : {})
     };
 
     // Compatibilidad: si no hay playwrightCmd definido, mantener comportamiento previo con pytestCmd
