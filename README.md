@@ -15,10 +15,11 @@ Backend del dashboard QA **RunLab Agrimpex**. Expone una **API REST** y un canal
 - [Puesta en marcha](#puesta-en-marcha)
 - [Configuración](#configuración)
 - [Conceptos clave (onboarding)](#conceptos-clave-onboarding)
+- [Onboarding en vivo: Socket.io y ejecuciones Playwright](#onboarding-en-vivo-socketio-y-ejecuciones-playwright)
 - [Estructura del proyecto](#estructura-del-proyecto)
 - [API REST (resumen)](#api-rest-resumen)
 - [Eventos Socket.io](#eventos-socketio)
-- [Datos en disco](#datos-en-disco)
+- [Almacenamiento y persistencia (sin base de datos)](#almacenamiento-y-persistencia-sin-base-de-datos)
 - [Pruebas y desarrollo](#pruebas-y-desarrollo)
 - [Seguridad](#seguridad)
 - [Solución de problemas](#solución-de-problemas)
@@ -255,7 +256,232 @@ Orquesta corridas Playwright y emite progreso en vivo.
 
 ---
 
-## Estructura del proyecto
+## Onboarding en vivo: Socket.io y ejecuciones Playwright
+
+Esta sección explica, de forma visual, cómo la UI se conecta en tiempo real a la API para mostrar **colección, ejecución, progreso, salida y resultados** de tests Playwright. Es la guía rápida recomendada para onboarding de terceros.
+
+### Mapa rápido (de un vistazo)
+
+```mermaid
+flowchart LR
+    subgraph UI["🖥️ UI (runlab-agrimpex-ui)"]
+      A["👤 Usuario activo<br/>Perfil: X-Profile-Id"]
+      B["📚 Vista /tests<br/>Catálogo + Visor"]
+      C["▶️ Ejecutar / Abortar"]
+      D["📟 Consola en vivo"]
+      E["📊 Progreso + Resultados"]
+      F["🧾 Reporte / Assets"]
+    end
+
+    subgraph RT["🔌 Tiempo real"]
+      S1["socket.connect()"]
+      S2["emit profile:join<br/>room profile:&lt;id&gt;"]
+      S3["on execution:* / test:* / progress"]
+    end
+
+    subgraph API["⚙️ API (runlab-agrimpex-api :3001)"]
+      R1["GET /api/tests/collect|cached"]
+      R2["POST /api/tests/run"]
+      R3["POST /api/tests/abort"]
+      SV["Socket.io server"]
+      COL["playwrightCollector"]
+      RUN["playwrightRunner"]
+    end
+
+    subgraph PW["🎭 Proyecto Playwright (projectPath)"]
+      CMD["playwrightCmd (base)"]
+      LIST["test --list --reporter=json"]
+      TEST["test &lt;targets&gt; ... --reporter=line,json"]
+      REP["JSON + playwright-report + test-results"]
+    end
+
+    A --> S1 --> S2 --> SV
+    B --> R1 --> COL --> CMD --> LIST --> B
+    C --> R2 --> RUN --> CMD --> TEST --> SV --> S3
+    S3 --> D
+    S3 --> E
+    RUN --> REP --> R1
+    REP --> F
+    C --> R3 --> RUN
+```
+
+### 1) Conexión y sala por perfil (aislamiento en tiempo real)
+
+- La UI trabaja con un **perfil activo** (sin autenticación en esta etapa).
+- Cada request REST relevante envía `X-Profile-Id`.
+- La UI se conecta por Socket.io al backend y emite `profile:join` con el `profileId`.
+- El servidor une el socket a la sala `profile:<id>` y **solo** emite ahí los eventos de ese perfil.
+- Si cambias de perfil, la UI sale/entra de la sala correspondiente para no mezclar ejecuciones.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 👤 Usuario (UI)
+    participant FE as UI: useSocket/socket client
+    participant IO as API: Socket.io server
+    participant ST as profileStore
+
+    U->>ST: Selecciona perfil activo
+    ST-->>FE: activeProfileId
+    FE->>IO: connect + emit "profile:join"(profileId)
+    IO-->>IO: socket.join("profile:<id>")
+    Note over FE,IO: A partir de aquí la UI recibe solo eventos del perfil activo
+    U->>ST: Cambia de perfil
+    FE->>IO: leave/join nueva sala profile:<nuevoId>
+```
+
+### 2) Catálogo de tests: de `playwrightCmd` a la vista de Tests
+
+`/tests` muestra el **proyecto configurado** del perfil (`projectPath`, `playwrightCmd`, projects, total). El catálogo puede venir de caché o de una recolección real.
+
+- **`GET /api/tests/cached`**: lectura rápida (memoria por perfil o `profiles/<id>/data/last-collection.json`), sin ejecutar Playwright.
+- **`GET /api/tests/collect`** (botón “Actualizar/Refrescar catálogo”): ejecuta Playwright en `projectPath` y actualiza caché en memoria + disco.
+- **`GET /api/tests/file?name=<ruta-relativa>`**: abre contenido de archivos dentro del `projectPath` (visor de `/tests`).
+
+> ⚠️ Si el catálogo en caché quedó desfasado (o proviene de una ejecución anterior), la UI puede mostrar specs que ya no existen en el proyecto actual. En ese caso, “Ver” puede fallar con “Archivo no encontrado”. Solución: ejecutar **Actualizar** en `/tests` para recolectar desde el `projectPath` configurado.
+
+```mermaid
+flowchart TD
+    A["UI /tests: Refrescar catálogo"] --> B{"Origen"}
+    B -->|"GET /tests/cached"| C["Memoria perfil\n(playwrightCollector)"]
+    C -->|miss| D["Disco\nprofiles/<id>/data/last-collection.json"]
+    B -->|"GET /tests/collect"| E["Spawn en projectPath"]
+    E --> F["&lt;playwrightCmd&gt; test --list --reporter=json"]
+    F --> G["Parse JSON tolerante\n(files, total, projects)"]
+    G --> H["setCached(profileId) + escribir last-collection.json"]
+    D --> I["Árbol de tests en UI"]
+    H --> I
+    C -->|hit| I
+```
+
+### 3) Cómo se construye el comando Playwright (`playwrightCmd`)
+
+`playwrightCmd` es el **comando base** configurado por perfil (Ajustes > Proyecto). La API agrega el subcomando y argumentos; **no** debe incluir `test` como parte fija del base recomendado.
+
+| Operación | Comando efectivo | Para qué se usa |
+|---|---|---|
+| Colección | `<playwrightCmd> test --list --reporter=json` | Descubrir specs/projects sin ejecutar |
+| Ejecución | `<playwrightCmd> test <targets> [--project=...] [-g ...] [--workers=...] --reporter=line,json` | Correr selección y emitir progreso/reportes |
+
+**Recomendado:** `npx playwright`  
+**Ejemplos válidos:** `npx playwright`, `pnpm exec playwright` (según el proyecto)  
+**Evitar:** usar `npx playwright test` como base (duplicaría `test`).
+
+```mermaid
+flowchart LR
+    CFG["config.playwrightCmd\n(base)"] --> COL["Colección\n+ test --list --reporter=json"]
+    CFG --> RUN["Ejecución\n+ test <targets> + filtros + --reporter=line,json"]
+    SEL["Selección UI\n(testIds/specs)"] --> RUN
+    OPT["Opciones\nproject / grep / workers"] --> RUN
+    ENV["Variables\nentorno guardado o .env + params\n+ SELENIUM_REMOTE_URL (si aplica)"] --> RUN
+    RUN --> LIVE["Streaming Socket.io\n(test:output, progress, test:*)"]
+    RUN --> OUT["Reporte JSON + assets\n(playwright-report, test-results)"]
+```
+
+### 4) Ejecución en vivo: qué emite la API y qué muestra la UI
+
+Al lanzar `POST /api/tests/run`, la API puede preparar dependencias (p.ej. Docker/grid), inicia Playwright, parsea salida/JSON y persiste resultados. La UI traduce cada evento en feedback visible.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 👤 Usuario
+    participant FE as UI /tests + useSocket
+    participant API as POST /api/tests/run
+    participant RUN as playwrightRunner
+    participant DOCK as dockerRunner (opcional)
+    participant PW as Playwright CLI
+    participant IO as Socket.io profile:<id>
+    participant FS as profiles/<id>/reports
+
+    U->>FE: Ejecutar tests seleccionados
+    FE->>API: testIds, project, grep, workers, env/params, useDocker?
+    alt useDocker + Selenium remoto
+      API->>IO: execution:preparing
+      IO-->>FE: "Iniciando Selenium en Docker..." (estado preparando)
+      API->>DOCK: ensureGrid()
+      DOCK-->>API: listo / error
+      opt error
+        API->>IO: execution:prepare-failed
+        IO-->>FE: Error visible y fin de preparación
+      end
+    end
+    API->>RUN: runTests(...)
+    API-->>FE: { success, message }
+    RUN->>IO: execution:started { total }
+    IO-->>FE: Consola: inicio + progreso 0/N
+    RUN->>PW: spawn &lt;playwrightCmd&gt; test ... --reporter=line,json
+    loop Durante la corrida
+      PW-->>RUN: stdout/stderr líneas
+      RUN->>IO: test:output { id, line }
+      RUN->>IO: test:started / test:completed
+      RUN->>IO: progress { current,total,percentage }
+      IO-->>FE: Consola en vivo + estado por test + barra/progreso
+    end
+    PW-->>RUN: close
+    RUN->>FS: <runId>.json + assets (playwright-report/test-results)
+    alt abortado
+      RUN->>IO: execution:aborted { reportId, completed, total, summary }
+    else completado
+      RUN->>IO: execution:completed { reportId, summary }
+    end
+    IO-->>FE: Resumen final + tabla de resultados + acceso a reporte/evidencia
+```
+
+### 5) Mapa de eventos -> experiencia en UI
+
+| Evento Socket.io | Qué significa | Qué muestra la UI |
+|---|---|---|
+| `execution:preparing` | Preparación previa (p.ej. grid Docker) | Mensaje de preparación en consola/estado |
+| `execution:prepare-failed` | Falló la preparación | Error visible; no inicia la corrida |
+| `execution:started` | Comenzó la ejecución | Total de tests, estado “en ejecución”, progreso inicial |
+| `test:started` | Un test inició | Marca el test como en curso (según heurística/stream) |
+| `test:output` | Línea/salida del proceso | Consola/log en vivo |
+| `test:completed` | Un test terminó | Estado (passed/failed/skipped/error), duración/mensaje |
+| `progress` | Avance agregado | Barra/contador/porcentaje de avance |
+| `execution:completed` | Corrida finalizada | Resumen final, resultados consolidados y reporte |
+| `execution:aborted` | Corrida abortada | Estado abortado con avance parcial y resumen disponible |
+
+> Todos los eventos de ejecución se emiten en la sala `profile:<id>` e incluyen contexto de perfil cuando aplica.
+
+### 6) Ciclo de vida de una ejecución (estado visual)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Seleccion
+    Seleccion --> Preparando: POST /tests/run (useDocker/grid)
+    Seleccion --> Ejecutando: POST /tests/run
+    Preparando --> ErrorPreparacion: execution:prepare-failed
+    Preparando --> Ejecutando: execution:started
+    Ejecutando --> Ejecutando: test:started / test:output / test:completed / progress
+    Ejecutando --> Completada: execution:completed
+    Ejecutando --> Abortada: POST /tests/abort -> execution:aborted
+    ErrorPreparacion --> [*]
+    Completada --> [*]
+    Abortada --> [*]
+```
+
+### 7) Checklist de onboarding para terceros (rápido y seguro)
+
+1. **Levantar servicios**: API en `:3001`, UI en `:5173` (dev) y confirmar conectividad `/api` + `/socket.io`.
+2. **Seleccionar/crear perfil** activo y verificar `X-Profile-Id` (aisla config, caché, reportes y sala Socket.io).
+3. **Configurar proyecto en Ajustes > Proyecto**:
+   - `projectPath` (ruta absoluta al kit Playwright)
+   - `playwrightCmd` base recomendado: `npx playwright` (sin `test`)
+   - variables/entorno y módulos necesarios (features)
+4. **Recolectar catálogo** en `/tests` con **Actualizar** (`/tests/collect`) y validar que los specs correspondan al proyecto configurado.
+5. **Abrir archivos desde el visor**: las rutas son relativas a `projectPath`; si el catálogo está desfasado, refrescar antes de usar “Ver”.
+6. **Ejecutar una corrida pequeña** (1-2 tests), observar consola/progreso/resultados en vivo y confirmar generación de reporte en `profiles/<id>/reports/`.
+7. **Si algo falla**: revisar `playwrightCmd`, dependencias del kit, disponibilidad del AUT, y mensajes de `execution:prepare-failed` / `test:output`.
+
+### 8) Notas vitales de operación
+
+- **Una ejecución activa por perfil**: si ya hay corrida, `/tests/run` puede responder conflicto y `/tests/status` indicará `running`.
+- **Caché vs realidad**: `/tests/cached` prioriza memoria y luego disco; usa `/tests/collect` para sincronizar con el proyecto actual.
+- **Aislamiento por perfil**: reportes, colección, entornos guardados, schedules y eventos Socket.io son independientes por `profileId`.
+- **Sin BD**: el backend persiste en filesystem/JSON y artefactos (ver sección de almacenamiento).
+
+---
 
 ```text
 runlab-agrimpex-api/
@@ -365,28 +591,80 @@ Base: `http://localhost:3001/api` (salvo indicación). Rutas de perfil requieren
 
 ---
 
-## Datos en disco
+## Almacenamiento y persistencia (sin base de datos)
 
-Ubicación base: `QADASH_DATA_DIR` (por defecto, la carpeta del backend).
+La API **no utiliza base de datos SQL ni NoSQL**. Toda la persistencia es **filesystem/JSON** y artefactos generados por las ejecuciones (reportes, assets de Playwright, cachés), resueltos a partir de `QADASH_DATA_DIR`.
+
+### Ubicación base
+
+- **Variable:** `QADASH_DATA_DIR`
+- **Valor por defecto:** raíz del backend (`runlab-agrimpex-api/`)
+- **Directorio principal de trabajo:** `<QADASH_DATA_DIR>/profiles/`
+
+### Estructura en disco
 
 ```text
-profiles/
-├── index.json                     # { activeProfileId, profiles[] }
-└── <profileId>/
-    ├── config.json                # Configuración del proyecto/comando
-    ├── automation-config.json      # Repo/ruta de automatización
-    ├── features.json              # Flags de módulos
-    ├── entornos.json              # Entornos/variables guardadas
-    ├── schedules.json             # Programaciones
-    ├── data/
-    │   └── last-collection.json   # Última colección cacheada
-    └── reports/
-        ├── <runId>.json           # Reporte de ejecución
-        └── <runId>/assets/        # Assets copiados (playwright-report/, test-results/)
+<QADASH_DATA_DIR>/
+└── profiles/
+    ├── index.json                         # Índice global: perfil activo + listado de perfiles
+    └── <profileId>/                       # Workspace aislado por perfil
+        ├── config.json                    # Configuración del perfil/proyecto
+        ├── automation-config.json         # Config de automatización (repoUrl, installPath)
+        ├── features.json                  # Feature flags/módulos habilitados
+        ├── entornos.json                  # Entornos/variables guardadas del perfil (UI)
+        ├── schedules.json                 # Programaciones de ejecución
+        ├── data/
+        │   └── last-collection.json       # Última colección de tests cacheada en disco
+        └── reports/
+            ├── <runId>.json               # Reporte consolidado de una ejecución
+            └── <runId>/
+                └── assets/
+                    ├── playwright-report/ # Copia de reporte HTML de Playwright (si existe)
+                    └── test-results/      # Copia de resultados/traces/screenshots/videos (si existe)
 ```
 
-- Los datos de `profiles/` son **runtime/locales** (no diseñados para versionarse).
-- La analítica y `/tests/cached` dependen de `reports/` y de `data/last-collection.json`.
+### Qué se guarda en cada lugar
+
+| Ruta / dato | Contenido | Quién lo gestiona / lo usa |
+|---|---|---|
+| `profiles/index.json` | `{ activeProfileId, profiles[] }` con metadatos de perfiles (`id`, `name`, fechas, etc.) | `services/profileManager.js`, rutas `/api/profile-admin` |
+| `profiles/<id>/config.json` | Configuración del perfil: `projectPath`, `envPath`, `playwrightCmd` (preferido), `pytestCmd` (legacy/deprecado), `seleniumRemoteUrl`, rutas de datos/evidencias | `/api/config`, `services/profileManager.js` |
+| `profiles/<id>/automation-config.json` | Configuración de automatización: `repoUrl`, `installPath` | `/api/automation`, `services/profileManager.js` |
+| `profiles/<id>/features.json` | Flags de módulos (`variables`, `reports`, `txtData`, `jsonData`, `errorImages`, `docker`, `schedules`) | `/api/features`, `middleware/requireFeature.js` |
+| `profiles/<id>/entornos.json` | **Entornos guardados** (conjuntos de variables nombrados) creados/editados desde la UI por perfil | `/api/profiles` (módulo `variables`), `services/profileManager.js` |
+| `profiles/<id>/schedules.json` | Definiciones de ejecuciones programadas | `/api/schedules`, `services/scheduler.js` |
+| `profiles/<id>/data/last-collection.json` | Catálogo cacheado de tests (`timestamp`, `files`, `total`, `projects`, etc.) | `GET /api/tests/collect` lo escribe; `GET /api/tests/cached` lo lee si no hay caché en memoria |
+| `profiles/<id>/reports/<runId>.json` | Reporte de ejecución (`id`, `timestamp`, `summary`, `tests[]`) | `services/playwrightRunner.js`, `/api/reports*` |
+| `profiles/<id>/reports/<runId>/assets/...` | Artefactos copiados desde el proyecto Playwright: `playwright-report/`, `test-results/` (trazas, capturas, videos según configuración) | `services/playwrightRunner.js`, `/api/reports/:id/assets/*` |
+
+### Caché en memoria (runtime, no persistente)
+
+- `services/playwrightCollector.js` mantiene un **caché en memoria por `profileId`** con la última colección.
+- `GET /api/tests/cached` responde primero desde memoria; si no existe, intenta leer `profiles/<id>/data/last-collection.json` y lo rehidrata en memoria.
+- Si el proceso de la API se reinicia, la caché en memoria se pierde (permanece la caché en disco si fue escrita).
+- Implicación práctica: un catálogo visible en UI puede provenir de una colección previa en memoria; para sincronizar con el `projectPath` actual usar **Actualizar** (`GET /api/tests/collect`).
+
+### Variables de entorno y archivos `.env` (importante)
+
+Hay dos conceptos relacionados pero almacenados en lugares distintos:
+
+1. **Entornos guardados del perfil (`entornos.json`)**  
+   - Son conjuntos nombrados de variables gestionados por la UI/API (`/api/profiles`, feature `variables`).
+   - Se guardan dentro del perfil: `profiles/<id>/entornos.json`.
+   - Se pueden seleccionar al ejecutar (`profileName`/entorno guardado) para inyectar variables en la corrida.
+
+2. **Archivos `.env` del proyecto de automatización**  
+   - Son archivos reales (`.env`, `.env.*`) ubicados en el **proyecto configurado** (`projectPath`) o referenciados por `envPath` en `config.json`.
+   - La API los lista/lee/escribe vía `/api/env` (feature `variables`) resolviendo rutas dentro del `projectPath` (o `envPath` como fallback), **no** los copia dentro de `profiles/`.
+   - También pueden usarse como fuente de variables para ejecución según la selección (`envFile`/`envPath`).
+
+> Resumen: `profiles/<id>/...` almacena la configuración/estado del dashboard por perfil; los `.env` operativos del kit Playwright viven en el propio `projectPath` (fuera de `profiles/`, salvo que `projectPath` apunte ahí).
+
+### Configuración del backend y datos operativos
+
+- `.env` del backend (si se usa) define variables como `PORT`, `QADASH_DATA_DIR`, `QADASH_DIST_DIR`, `UPDATE_TOKEN`, etc. (ver sección **Configuración**).
+- `profiles/` es contenido **runtime/local** (típicamente no versionado). `QADASH_DATA_DIR` permite ubicarlo fuera del árbol del repositorio si se desea.
+- El backend crea/siembra perfiles y archivos base al iniciar/migrar cuando es necesario (`services/profileMigration.js`, `services/profileManager.js`).
 
 ---
 
