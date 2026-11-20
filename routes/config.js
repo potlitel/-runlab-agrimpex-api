@@ -93,6 +93,62 @@ function findEnvFile(projectPath, depth = 2) {
   return null;
 }
 
+function detectProjectMcp(projectPath) {
+  if (!projectPath || !fs.existsSync(projectPath)) return { detected: false, signals: [] };
+  try {
+    if (!fs.statSync(projectPath).isDirectory()) return { detected: false, signals: [] };
+  } catch { return { detected: false, signals: [] }; }
+
+  const signals = [];
+
+  // package.json: dependencias y scripts relacionados con MCP (p.ej. @playwright/mcp)
+  const pkgPath = path.join(projectPath, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      const sections = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+      for (const section of sections) {
+        const deps = pkg && pkg[section] && typeof pkg[section] === 'object' ? pkg[section] : {};
+        for (const name of Object.keys(deps)) {
+          if (/(@playwright\/mcp|\bplaywright-mcp\b|(^|[\/\-_])mcp([\/\-_]|$))/i.test(name) || /^@.*\/.*mcp/i.test(name)) {
+            signals.push(`dependency:${name}`);
+          }
+        }
+      }
+      const scripts = pkg && pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+      for (const [key, value] of Object.entries(scripts)) {
+        const text = `${key} ${String(value ?? '')}`;
+        if (/@playwright\/mcp|\bplaywright-mcp\b|\bmcp-server\b/i.test(text)) {
+          signals.push(`script:${key}`);
+        }
+      }
+    } catch {}
+  }
+
+  // Archivos de configuración MCP comunes en la raíz del proyecto
+  const mcpFiles = ['mcp.json', '.mcp.json', 'mcp.config.json', 'mcp-config.json', '.cursor/mcp.json', '.vscode/mcp.json'];
+  for (const rel of mcpFiles) {
+    try {
+      if (fs.existsSync(path.join(projectPath, rel))) signals.push(`file:${rel}`);
+    } catch {}
+  }
+
+  // Referencias en playwright.config.*
+  try {
+    const entries = fs.readdirSync(projectPath);
+    for (const entry of entries) {
+      if (!/^playwright\.config\.(t|j)sx?$|^playwright\.config\.mjs$|^playwright\.config\.cjs$/i.test(entry)) continue;
+      try {
+        const content = fs.readFileSync(path.join(projectPath, entry), 'utf-8');
+        if (/@playwright\/mcp|\bplaywright-mcp\b/i.test(content)) signals.push(`config:${entry}`);
+      } catch {}
+    }
+  } catch {}
+
+  const unique = [...new Set(signals)];
+  return { detected: unique.length > 0, signals: unique };
+}
+
 router.get('/detect-env', (req, res) => {
   try {
     const projectPath = req.query.projectPath || '';
@@ -112,7 +168,13 @@ function writeConfig(p, data) {
 
 router.get('/', (req, res) => {
   try {
-    res.json(readConfig(req.profile.config));
+    const config = readConfig(req.profile.config);
+    res.json({
+      ...config,
+      projectFeatures: {
+        mcp: detectProjectMcp(config.projectPath || '')
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
