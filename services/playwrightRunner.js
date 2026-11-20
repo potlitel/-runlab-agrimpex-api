@@ -305,6 +305,61 @@ function normalizeReportAssets(report, projectPath, runAssetsDir) {
   report.summary.previewImage = previewImage;
 }
 
+function resolveFailureEvidenceFolder(projectPath, configuredPath) {
+  if (configuredPath && String(configuredPath).trim()) return String(configuredPath).trim();
+  if (projectPath) return path.join(projectPath, 'reports', 'errors');
+  return '';
+}
+
+function sanitizeFilePart(value, max = 80) {
+  const s = String(value || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return 'evidence';
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function isFailureStatus(status) {
+  return status === 'failed' || status === 'error';
+}
+
+function isPublishableEvidence(att) {
+  if (!att) return false;
+  const ct = String(att.contentType || '').toLowerCase();
+  const name = String(att.name || '').toLowerCase();
+  const p = String(att.path || att.assetPath || '').toLowerCase();
+  if (ct.startsWith('image/') || ct.startsWith('video/')) return true;
+  if (ct === 'application/zip' || ct === 'text/markdown' || ct === 'text/plain') return true;
+  if (name.includes('screenshot') || name.includes('trace') || name.includes('video') || name.includes('error-context')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|webm|mp4|zip|md|txt)$/i.test(p);
+}
+
+function publishFailureEvidence(report, runAssetsDir, projectPath, options = {}) {
+  const folder = resolveFailureEvidenceFolder(projectPath, options.errorImagesPath);
+  if (!folder) return;
+  try { safeMkdir(folder); } catch { return; }
+
+  for (const test of (report.tests || [])) {
+    if (!isFailureStatus(test.status)) continue;
+    if (!Array.isArray(test.attachments)) continue;
+    let idx = 0;
+    for (const att of test.attachments) {
+      if (!att || !att.assetPath || !isPublishableEvidence(att)) continue;
+      const src = path.join(runAssetsDir, att.assetPath);
+      try {
+        if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
+      } catch { continue; }
+
+      idx++;
+      const ext = path.extname(att.assetPath) || path.extname(att.path || '') || '.bin';
+      const base = sanitizeFilePart(report.id) + '__' + sanitizeFilePart(test.id, 120) + '__' + String(idx).padStart(2, '0') + ext;
+      const dest = path.join(folder, base);
+      try { fs.copyFileSync(src, dest); } catch {}
+    }
+  }
+}
+
 function deriveSummary(tests, jsonStats, durationSec) {
   const passed = tests.filter(t => t.status === 'passed').length;
   const failed = tests.filter(t => t.status === 'failed').length;
@@ -421,6 +476,9 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
 
   // Normalizar adjuntos a rutas de assets servibles y calcular imagen de preview del reporte.
   try { normalizeReportAssets(report, projectPath, runAssetsDir); } catch {}
+
+  // Publicar evidencias de tests fallidos a la carpeta global (galería de Evidencia de fallos).
+  try { publishFailureEvidence(report, runAssetsDir, projectPath, options); } catch {}
 
   safeMkdir(reportsDir);
   fs.writeFileSync(path.join(reportsDir, `${reportId}.json`), JSON.stringify(report, null, 2));

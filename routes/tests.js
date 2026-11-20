@@ -138,6 +138,7 @@ router.post('/run', async (req, res) => {
     if (grep) options.grep = grep;
     if (workers) options.workers = workers;
     if (cfg && cfg.evidence) options.evidence = cfg.evidence;
+    options.errorImagesPath = cfg && cfg.errorImagesPath ? cfg.errorImagesPath : '';
 
     runTests(io, req.profile.id, testIds, projectPath, runnerCmd, envVars, cleanPerTest, req.profile.reportsDir, options);
     res.json({ success: true, message: `Starting ${testIds.length} tests` });
