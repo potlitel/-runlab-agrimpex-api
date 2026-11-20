@@ -27,7 +27,13 @@ function abortExecution(profileId) {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(s.currentProc.pid), '/f', '/t'], { shell: true });
       } else {
-        s.currentProc.kill('SIGTERM');
+        // El proceso se lanza en su propio grupo (detached); matar el grupo
+        // asegura terminar también a los workers hijos de Playwright.
+        try {
+          process.kill(-s.currentProc.pid, 'SIGTERM');
+        } catch {
+          s.currentProc.kill('SIGTERM');
+        }
       }
     } catch {
       // ya terminó
@@ -145,8 +151,6 @@ function flattenJsonReport(json, projectPath) {
   }
 
   for (const s of ((json && json.suites) || [])) visitSuite(s, [], '');
-
-  for (const s of ((json && json.suites) || [])) visitSuite(s, []);
   return tests;
 }
 
@@ -186,6 +190,7 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
   const proc = spawn(cmd, args, {
     cwd: projectPath,
     shell: true,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       ...(envVars || {}),
