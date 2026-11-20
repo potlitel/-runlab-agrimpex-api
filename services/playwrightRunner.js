@@ -105,10 +105,21 @@ function collectAttachments(result) {
 function flattenJsonReport(json, projectPath) {
   const tests = [];
   const base = projectPath ? path.resolve(projectPath) : '';
+  const rootDir = json && json.config && json.config.rootDir ? path.resolve(json.config.rootDir) : '';
 
   function relFile(filePath) {
     if (!filePath) return '';
-    const abs = path.isAbsolute(filePath) ? filePath : path.resolve(projectPath || '', filePath);
+    let abs;
+    if (path.isAbsolute(filePath)) {
+      abs = filePath;
+    } else {
+      const fromProject = base ? path.resolve(base, filePath) : path.resolve(filePath);
+      const fromRoot = rootDir ? path.resolve(rootDir, filePath) : null;
+      if (fromRoot && fs.existsSync(fromRoot)) abs = fromRoot;
+      else if (fs.existsSync(fromProject)) abs = fromProject;
+      else if (fromRoot && base && (fromRoot === base || fromRoot.startsWith(base + path.sep))) abs = fromRoot;
+      else abs = fromProject;
+    }
     if (base && (abs === base || abs.startsWith(base + path.sep))) {
       return path.relative(base, abs).replace(/\\/g, '/');
     }
@@ -117,10 +128,22 @@ function flattenJsonReport(json, projectPath) {
 
   function visitSuite(suite, ancestors, inheritedFile) {
     if (!suite) return;
+    const rawFile = suite.file ? String(suite.file).replace(/\\/g, '/') : '';
     const suiteFile = relFile(suite.file || inheritedFile);
     const title = suite.title ? String(suite.title).trim() : '';
     const fileBase = suiteFile ? path.posix.basename(suiteFile) : '';
-    const isFileSuite = title && suiteFile && (title === suiteFile || title === fileBase || title.replace(/\\/g, '/') === suiteFile);
+    const rawBase = rawFile ? path.posix.basename(rawFile) : '';
+    const normTitle = title.replace(/\\/g, '/');
+    const isFileSuite = !!(title && suiteFile && (
+      title === suiteFile ||
+      normTitle === suiteFile ||
+      title === rawFile ||
+      normTitle === rawFile ||
+      title === fileBase ||
+      title === rawBase ||
+      (rawFile && (rawFile.endsWith('/' + normTitle) || normTitle.endsWith('/' + rawFile))) ||
+      (suiteFile && (suiteFile.endsWith('/' + normTitle) || normTitle.endsWith('/' + suiteFile)))
+    ));
     const nextAncestors = (title && !isFileSuite) ? ancestors.concat([title]) : ancestors;
     for (const spec of (suite.specs || [])) {
       const file = relFile(spec.file || (spec.location && spec.location.file) || suiteFile);
