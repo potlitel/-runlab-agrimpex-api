@@ -23,14 +23,31 @@ function slugify(name) {
     .replace(/^-+|-+$/g, '') || 'perfil';
 }
 
+function normalizeIndex(index) {
+  const out = index && typeof index === 'object' ? { ...index } : {};
+  if (!Array.isArray(out.profiles)) out.profiles = [];
+  if (!('activeProfileId' in out)) out.activeProfileId = null;
+  if (!('templateProfileId' in out)) out.templateProfileId = null;
+  const td = out.testDataDefaults && typeof out.testDataDefaults === 'object' ? out.testDataDefaults : {};
+  out.testDataDefaults = {
+    txtFolderPath: typeof td.txtFolderPath === 'string' ? td.txtFolderPath : '',
+    jsonDataPath: typeof td.jsonDataPath === 'string' ? td.jsonDataPath : '',
+  };
+  const modes = ['defaults', 'template', 'active', 'none'];
+  out.createProfileTestDataMode = modes.includes(out.createProfileTestDataMode)
+    ? out.createProfileTestDataMode
+    : 'none';
+  return out;
+}
+
 function readIndex() {
-  try { return JSON.parse(fs.readFileSync(INDEX_PATH, 'utf-8')); }
-  catch { return { activeProfileId: null, profiles: [] }; }
+  try { return normalizeIndex(JSON.parse(fs.readFileSync(INDEX_PATH, 'utf-8'))); }
+  catch { return normalizeIndex({ activeProfileId: null, profiles: [] }); }
 }
 
 function writeIndex(index) {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
-  fs.writeFileSync(INDEX_PATH, JSON.stringify(index, null, 2));
+  fs.writeFileSync(INDEX_PATH, JSON.stringify(normalizeIndex(index), null, 2));
 }
 
 function listProfiles() {
@@ -91,11 +108,114 @@ function seedProfileFiles(paths, { config, features, entornos, schedules } = {})
   fs.writeFileSync(paths.automationConfig, JSON.stringify({ repoUrl: '', installPath: '' }, null, 2));
 }
 
-function createProfile(name) {
+function safeReadJson(filePath) {
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf-8')); }
+  catch { return null; }
+}
+
+function getProfileSettings() {
+  const index = readIndex();
+  return {
+    activeProfileId: index.activeProfileId || null,
+    profiles: index.profiles || [],
+    templateProfileId: index.templateProfileId || null,
+    testDataDefaults: index.testDataDefaults,
+    createProfileTestDataMode: index.createProfileTestDataMode,
+  };
+}
+
+function updateProfileSettings(patch = {}) {
+  const index = readIndex();
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'templateProfileId')) {
+    const v = patch.templateProfileId;
+    if (v === null || v === '' || v === undefined) {
+      index.templateProfileId = null;
+    } else if (profileExists(v)) {
+      index.templateProfileId = v;
+    } else {
+      throw new Error('Perfil plantilla no encontrado');
+    }
+  }
+
+  if (patch.testDataDefaults && typeof patch.testDataDefaults === 'object') {
+    const td = patch.testDataDefaults;
+    if (Object.prototype.hasOwnProperty.call(td, 'txtFolderPath')) {
+      index.testDataDefaults.txtFolderPath = td.txtFolderPath == null ? '' : String(td.txtFolderPath);
+    }
+    if (Object.prototype.hasOwnProperty.call(td, 'jsonDataPath')) {
+      index.testDataDefaults.jsonDataPath = td.jsonDataPath == null ? '' : String(td.jsonDataPath);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'createProfileTestDataMode')) {
+    const modes = ['defaults', 'template', 'active', 'none'];
+    if (!modes.includes(patch.createProfileTestDataMode)) {
+      throw new Error('Modo de datos de prueba inválido');
+    }
+    index.createProfileTestDataMode = patch.createProfileTestDataMode;
+  }
+
+  writeIndex(index);
+  return getProfileSettings();
+}
+
+function resolveTestDataPaths(mode, index) {
+  const m = mode || 'none';
+  if (m === 'none') return { txtFolderPath: '', jsonDataPath: '' };
+
+  if (m === 'defaults') {
+    return {
+      txtFolderPath: index.testDataDefaults.txtFolderPath || '',
+      jsonDataPath: index.testDataDefaults.jsonDataPath || '',
+    };
+  }
+
+  if (m === 'active') {
+    const activeId = index.activeProfileId;
+    if (!activeId || !profileExists(activeId)) return { txtFolderPath: '', jsonDataPath: '' };
+    const cfg = safeReadJson(profilePaths(activeId).config) || {};
+    return {
+      txtFolderPath: typeof cfg.txtFolderPath === 'string' ? cfg.txtFolderPath : '',
+      jsonDataPath: typeof cfg.jsonDataPath === 'string' ? cfg.jsonDataPath : '',
+    };
+  }
+
+  if (m === 'template') {
+    const tplId = index.templateProfileId;
+    if (!tplId || !profileExists(tplId)) return { txtFolderPath: '', jsonDataPath: '' };
+    const cfg = safeReadJson(profilePaths(tplId).config) || {};
+    return {
+      txtFolderPath: typeof cfg.txtFolderPath === 'string' ? cfg.txtFolderPath : '',
+      jsonDataPath: typeof cfg.jsonDataPath === 'string' ? cfg.jsonDataPath : '',
+    };
+  }
+
+  return { txtFolderPath: '', jsonDataPath: '' };
+}
+
+function applyTestDataPathsToProfile(paths, testDataPaths) {
+  if (!testDataPaths) return;
+  const cfg = safeReadJson(paths.config) || { ...DEFAULT_CONFIG };
+  if (Object.prototype.hasOwnProperty.call(testDataPaths, 'txtFolderPath')) {
+    cfg.txtFolderPath = testDataPaths.txtFolderPath || '';
+  }
+  if (Object.prototype.hasOwnProperty.call(testDataPaths, 'jsonDataPath')) {
+    cfg.jsonDataPath = testDataPaths.jsonDataPath || '';
+  }
+  fs.writeFileSync(paths.config, JSON.stringify(cfg, null, 2));
+}
+
+function createProfile(name, options = {}) {
+  const index = readIndex();
+  const mode = options.testDataSource || index.createProfileTestDataMode || 'none';
+  const testDataPaths = resolveTestDataPaths(mode, index);
+
   const id = uniqueId(slugify(name));
   const paths = profilePaths(id);
   seedProfileFiles(paths);
-  const index = readIndex();
+  applyTestDataPathsToProfile(paths, testDataPaths);
+
   const entry = { id, name: name.trim() || id, createdAt: new Date().toISOString() };
   index.profiles.push(entry);
   if (!index.activeProfileId) index.activeProfileId = id;
@@ -139,6 +259,9 @@ function deleteProfile(id) {
   if (index.activeProfileId === id) {
     index.activeProfileId = index.profiles[0] ? index.profiles[0].id : null;
   }
+  if (index.templateProfileId === id) {
+    index.templateProfileId = null;
+  }
   writeIndex(index);
   try { fs.rmSync(profilePaths(id).dir, { recursive: true, force: true }); } catch {}
 }
@@ -162,5 +285,6 @@ module.exports = {
   slugify, readIndex, writeIndex, listProfiles, profileExists,
   getActiveProfileId, setActiveProfileId, profilePaths, resolveProfile,
   seedProfileFiles, createProfile, renameProfile, duplicateProfile, deleteProfile,
+  getProfileSettings, updateProfileSettings,
   readEntornos, writeEntornos, getEntorno,
 };

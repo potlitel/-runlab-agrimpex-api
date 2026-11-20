@@ -7,14 +7,21 @@ let runtimeBusy = () => false;
 try { runtimeBusy = require('../services/runtimeRegistry').isProfileBusy; } catch {}
 
 router.get('/', (req, res) => {
-  res.json({ activeProfileId: pm.getActiveProfileId(), profiles: pm.listProfiles() });
+  res.json(pm.getProfileSettings());
+});
+
+router.patch('/settings', (req, res) => {
+  try {
+    res.json(pm.updateProfileSettings(req.body || {}));
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 router.post('/', (req, res) => {
   try {
     const name = (req.body && req.body.name) || '';
     if (!name.trim()) return res.status(400).json({ error: 'name requerido' });
-    res.json(pm.createProfile(name));
+    const testDataSource = req.body && req.body.testDataSource;
+    res.json(pm.createProfile(name, testDataSource ? { testDataSource } : {}));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
