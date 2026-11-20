@@ -126,12 +126,50 @@ function detectProjectMcp(projectPath) {
   }
 
   // Archivos de configuración MCP comunes en la raíz del proyecto
-  const mcpFiles = ['mcp.json', '.mcp.json', 'mcp.config.json', 'mcp-config.json', '.cursor/mcp.json', '.vscode/mcp.json'];
+  const mcpFiles = ['mcp.json', '.mcp.json', 'mcp.config.json', 'mcp-config.json', '.cursor/mcp.json', '.vscode/mcp.json', 'claude_desktop_config.json'];
   for (const rel of mcpFiles) {
     try {
       if (fs.existsSync(path.join(projectPath, rel))) signals.push(`file:${rel}`);
     } catch {}
   }
+
+  // Configuraciones de clientes/agentes con sección MCP (p. ej. opencode.json)
+  const mcpConfigFiles = ['opencode.json', 'opencode.jsonc', '.opencode/opencode.json', '.opencode/opencode.jsonc'];
+  for (const rel of mcpConfigFiles) {
+    const full = path.join(projectPath, rel);
+    try {
+      if (!fs.existsSync(full)) continue;
+      const raw = fs.readFileSync(full, 'utf-8');
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // JSONC/simple comments fallback
+        const stripped = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s+)\/\/.*$/gm, '');
+        try { parsed = JSON.parse(stripped); } catch {}
+      }
+      if (!parsed || typeof parsed !== 'object') continue;
+      const mcp = parsed.mcp || parsed.mcpServers;
+      if (mcp && typeof mcp === 'object' && !Array.isArray(mcp) && Object.keys(mcp).length > 0) {
+        signals.push(`config:${rel}`);
+        for (const [name, cfg] of Object.entries(mcp)) {
+          if (cfg && typeof cfg === 'object' && cfg.enabled === false) continue;
+          signals.push(`server:${name}`);
+        }
+      }
+    } catch {}
+  }
+
+  // Documentación del proyecto que declara integración Playwright MCP
+  try {
+    const readmePath = path.join(projectPath, 'README.md');
+    if (fs.existsSync(readmePath)) {
+      const readme = fs.readFileSync(readmePath, 'utf-8');
+      if (/@playwright\/mcp/i.test(readme) || /Playwright MCP/i.test(readme)) {
+        signals.push('docs:README.md');
+      }
+    }
+  } catch {}
 
   // Referencias en playwright.config.*
   try {
