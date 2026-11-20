@@ -2,8 +2,10 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
 const requireFeature = require('./middleware/requireFeature');
 const resolveProfile = require('./middleware/resolveProfile');
+const swaggerSpec = require('./swagger');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,6 +50,10 @@ app.use('/api/jsondata', requireFeature('jsonData'), require('./routes/jsondata'
 app.use('/api/docker', requireFeature('docker'), require('./routes/docker'));
 app.use('/api/schedules', requireFeature('schedules'), require('./routes/schedules'));
 app.use('/api/errors', requireFeature('errorImages'), require('./routes/errors'));
+
+// Swagger/OpenAPI docs (spec inicial; ampliar según se documenten más rutas)
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+app.get('/api/openapi.json', (req, res) => res.json(swaggerSpec));
 
 // Proxy del noVNC: antes del fallback de SPA, que si no se lo tragaria.
 require('./middleware/novncProxy')(app, server);
