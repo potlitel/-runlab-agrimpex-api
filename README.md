@@ -12,7 +12,9 @@ Backend del dashboard QA **RunLab Agrimpex**. Expone una **API REST** y un canal
 - [Estado actual](#estado-actual)
 - [Arquitectura rápida](#arquitectura-rápida)
 - [Requisitos](#requisitos)
-- [Puesta en marcha](#puesta-en-marcha)
+- [Ejecución manual](#ejecución-manual)
+- [Ejecución con Docker](#ejecución-con-docker)
+- [Ventaja de la imagen Playwright](#ventaja-de-la-imagen-playwright)
 - [Configuración](#configuración)
 - [Conceptos clave (onboarding)](#conceptos-clave-onboarding)
 - [Onboarding en vivo: Socket.io y ejecuciones Playwright](#onboarding-en-vivo-socketio-y-ejecuciones-playwright)
@@ -64,7 +66,7 @@ runlab-agrimpex-api (Express + Socket.io, :3001)
 
 | Herramienta | Uso | Obligatoria |
 |---|---|---|
-| Node.js 18+ | Ejecutar API y tooling | Sí |
+| Node.js 20+ (recomendado 22/24; Docker usa Node 24) | Ejecutar API y tooling | Sí |
 | npm | Dependencias y scripts | Sí |
 | Git | Operaciones de automatización/actualización (según uso) | Recomendada |
 | Proyecto Playwright (kit) + `npx playwright`/Node deps del kit | Colección y ejecución | Sí para correr tests |
@@ -76,37 +78,230 @@ runlab-agrimpex-api (Express + Socket.io, :3001)
 
 ---
 
-## Puesta en marcha
+## Ejecución manual
 
-### 1) Instalar dependencias
+Modo recomendado para **desarrollar la API o depurarla con Playwright instalado en el host**. No necesita Docker: Node/npm y el kit de tests corren como procesos locales.
+
+### 1) Requisitos
+
+| Herramienta | Versión recomendada | Para qué |
+|---|---|---|
+| Node.js | 22 (mínimo 20) | Servidor Express + Socket.io y tooling |
+| npm | el que traiga Node | Instalar dependencias con `package-lock.json` |
+| Git | cualquiera | Módulos de automatización/self-update |
+| Kit Playwright + AUT | `@playwright/test@1.62.1` en el kit | Colección y ejecución real de tests |
+
+### 2) Instalar dependencias
+
 ```bash
 cd runlab-agrimpex-api
-npm install
+npm ci                 # reproducible: usa package-lock.json
 ```
 
-### 2) Ejecutar
-```bash
-# Desarrollo (recarga con nodemon)
-npm run dev
+### 3) Configurar el entorno (opcional)
 
-# Producción/simple
-npm start
+```bash
+# Por defecto QADASH_DATA_DIR es la raíz del repo (profiles/ y reportes/).
+# Si prefieres aislar los datos de runtime:
+export QADASH_DATA_DIR="$PWD/.runtime"
+
+# Si quieres que esta API sirva el build de la UI (producción local):
+# export QADASH_DIST_DIR="../runlab-agrimpex-ui/dist"
+
+# Cambiar puerto (recuerda alinear el proxy de la UI):
+# export PORT=3001
 ```
-- Puerto por defecto: **`3001`** (`PORT` para cambiar).
-- Al iniciar: aplica migración/bootstrap de perfiles (`services/profileMigration.js`) y crea **"Perfil 1"** si no existe ninguno.
 
-### 3) Uso con el frontend
-- **Dev UI:** en `runlab-agrimpex-ui` → `npm run dev` (Vite `:5173`) con proxy de `/api` y `/socket.io` a `:3001`.
-- **Prod:** construir la UI (`npm run build`) y servir `dist` desde este backend (ver `QADASH_DIST_DIR`).
+Al arrancar se aplica la migración de perfiles (`services/profileMigration.js`) y se crea **"Perfil 1"** si aún no existe ninguno. No hay base de datos: todo se persiste como JSON/artefactos en `QADASH_DATA_DIR` (ver [Almacenamiento](#almacenamiento-y-persistencia-sin-base-de-datos)).
 
-### 4) Smoke test rápido
+### 4) Arrancar la API
+
 ```bash
-# Perfil/admin
-curl http://localhost:3001/api/profile-admin
+npm run dev    # nodemon: recarga al cambiar archivos
+# o bien
+npm start      # node server.js, sin recarga
+```
 
-# Config del perfil activo/indicado
+Puerto por defecto: **`3001`**. Swagger UI: <http://localhost:3001/api/docs/>.
+
+### 5) Arrancar la UI en paralelo (otra terminal)
+
+```bash
+cd ../runlab-agrimpex-ui
+npm ci
+npm run dev            # http://localhost:5173
+```
+
+En desarrollo no hay que definir `VITE_API_URL`: `vite.config.ts` hace proxy de `/api` y `/socket.io` hacia `http://localhost:3001`. Si la API está en otro host/puerto, ajusta ese proxy o define `VITE_API_URL`/`VITE_SOCKET_URL` en `runlab-agrimpex-ui/.env` y reinicia Vite.
+
+### 6) Smoke test
+
+```bash
+curl -fsS http://localhost:3001/api/openapi.json | head -c 160; echo
+curl -i http://localhost:3001/api/profile-admin
 curl -H "X-Profile-Id: perfil-1" http://localhost:3001/api/config
 ```
+
+Respuesta esperada del primer comando: `{"openapi":"3.0.3","info":{"title":"RunLab Agrimpex API"...}}`.
+
+### 7) Preparar Playwright en el host (para ejecutar tests)
+
+La API **no incluye la suite**. Configura el perfil desde la UI (**Ajustes > Proyecto**):
+
+- `projectPath`: ruta absoluta al kit, p. ej. `/home/potlitel/Trabajo/EICMA/Agrimpex/playwright-kit-profesional`.
+- `playwrightCmd`: `npx playwright` (comando **base**, sin `test`).
+- `envPath` y variables del AUT según corresponda (`localhost:5000` / `localhost:8990`).
+
+Instala dependencias y navegadores **en el kit**, no en la API:
+
+```bash
+cd /ruta/a/playwright-kit-profesional
+npm ci
+npx playwright install
+# en Linux/CI sin librerías del sistema: npx playwright install --with-deps
+```
+
+Después, en **Tests**, pulsa **Actualizar** para recolectar el catálogo y lanza una corrida pequeña. En modo manual los navegadores son los del host, así que la imagen Docker de Playwright no interviene.
+
+### 8) Servir el build de la UI desde la API (producción local)
+
+```bash
+cd ../runlab-agrimpex-ui && npm run build
+cd ../runlab-agrimpex-api
+QADASH_DIST_DIR=../runlab-agrimpex-ui/dist npm start
+# UI + API en http://localhost:3001
+```
+
+> Para detener: `Ctrl+C` en cada terminal. Antes de usar Docker, asegúrate de liberar `3001` (y `5173` si aplica).
+
+---
+
+## Ejecución con Docker
+
+Levanta **API + UI** como stack desde la **raíz del workspace** (`qa-dashboard/`), no desde dentro de los repos. No necesitas Node/npm en el host: todo el build ocurre dentro de las imágenes.
+
+### 1) Arranque estándar
+
+```bash
+cd /home/potlitel/Trabajo/EICMA/Agrimpex/qa-dashboard   # o: cd .. desde cualquiera de los dos repos
+cp .env.example .env        # opcional: los defaults ya funcionan
+docker compose up -d --build
+docker compose ps
+```
+
+> ⚠️ El puerto `3000` pertenece al stack DAM de referencia (`dam-frontend`). Este stack publica su UI en **`3002`**. No hace falta detener DAM.
+
+| Servicio | Contenedor | URL desde el host | Dentro de la red |
+|---|---|---|---|
+| `qadash-api` | `qadash-api` | <http://localhost:3001> · Swagger `/api/docs/` | `qadash-api:3001` |
+| `qadash-ui` | `qadash-ui` | <http://localhost:3002> | `qadash-ui:3000` |
+
+La UI arranca solo después de que la API pase el **healthcheck** (`GET /api/openapi.json` en `:3001`). El `Dockerfile` de la API usa `node:22-alpine` por defecto (ya en caché), instala con `npm ci --omit=dev`, crea `/data` y corre como uid `1000:1000`. La UI usa `Dockerfile.npm` multi-stage y `serve -s dist`.
+
+### 2) Verificación
+
+```bash
+docker compose ps
+curl -i http://localhost:3001/api/openapi.json     # 200
+curl -i http://localhost:3002/                     # 200
+docker compose logs -f qadash-api
+```
+
+Resultado ya verificado en este equipo:
+
+```text
+qadash-api   Up (healthy)   0.0.0.0:3001->3001/tcp
+qadash-ui    Up             0.0.0.0:3002->3000/tcp
+HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Dashboard</title>
+```
+
+### 3) Variables y persistencia
+
+- **En tiempo de ejecución** (API): `PORT`, `QADASH_DATA_DIR=/data`, `TZ`, `QADASH_NOVNC_*`, `UPDATE_TOKEN`. Se definen en `docker-compose.yml` / `.env` de la raíz.
+- **En tiempo de build** (UI): `VITE_API_URL` y `VITE_SOCKET_URL` se **hornean en el bundle**. Deben ser alcanzables desde el **navegador**, no desde el contenedor. Cambiarlos exige reconstruir la UI:
+
+```bash
+docker compose up -d --build qadash-ui
+```
+
+- Persistencia: volumen nombrado **`qadash-data`** montado en `/data` (perfiles, reportes, assets). `.dockerignore` evita copiar el `profiles/` local a la imagen.
+
+```bash
+docker compose down       # detiene y conserva qadash-data
+docker compose down -v    # detiene y BORRA perfiles/reportes
+```
+
+### 4) Módulos que necesitan el host
+
+En `docker-compose.yml` hay montajes **comentados** para activarlos cuando haga falta:
+
+```yaml
+- /var/run/docker.sock:/var/run/docker.sock
+- /usr/bin/docker:/usr/bin/docker:ro
+- /ruta/al/playwright-kit-profesional:/workspace/playwright-kit-profesional
+```
+
+- Sin el socket/CLI, el módulo `/api/docker` no puede controlar el daemon del host.
+- El kit **no** se incluye en la imagen. Si vas a ejecutar tests dentro del contenedor, monta el kit y pon `projectPath=/workspace/playwright-kit-profesional`. Usa montaje escribible si la corrida debe generar `test-results/` o `playwright-report/` dentro del proyecto.
+- El AUT en `localhost` del host se alcanza como `host.docker.internal` (ya configurado con `extra_hosts: host-gateway`).
+
+### 5) Ciclo de vida y equivalente sin Compose
+
+```bash
+docker compose logs -f qadash-api
+docker compose restart qadash-api
+docker compose exec qadash-api sh
+docker compose up -d --build        # reconstruir todo
+```
+
+Equivalente manual (Compose sigue siendo preferible por healthcheck, red y `depends_on`):
+
+```bash
+docker build -f runlab-agrimpex-api/Dockerfile -t qadash-agrimpex-api runlab-agrimpex-api
+docker run -d --name qadash-api -p 3001:3001 -v qadash-data:/data \
+  --add-host=host.docker.internal:host-gateway qadash-agrimpex-api
+
+docker build -f runlab-agrimpex-ui/Dockerfile.npm -t qadash-agrimpex-ui \
+  --build-arg VITE_API_URL=http://localhost:3001/api \
+  --build-arg VITE_SOCKET_URL=http://localhost:3001 runlab-agrimpex-ui
+docker run -d --name qadash-ui -p 3002:3000 qadash-agrimpex-ui
+```
+
+Ver [guía completa de onboarding Docker](../docs/ONBOARDING_DOCKER.md).
+
+---
+
+## Ventaja de la imagen Playwright
+
+`mcr.microsoft.com/playwright:v1.62.1-noble` **no es necesaria para levantar el dashboard**: REST y Socket.io funcionan con `node:22-alpine`. Es una **base opcional de la API** pensada para cuando quieras ejecutar Playwright **dentro del contenedor**.
+
+| Base | ¿Descarga nueva? | Dashboard REST/WS | Playwright dentro del contenedor |
+|---|---|---|---|
+| `node:22-alpine` (default) | No, ya está en caché | ✅ | ⚠️ Sin navegadores ni libs del sistema |
+| `mcr.microsoft.com/playwright:v1.62.1-noble` | Sí (≈ 1.7 GB) | ✅ | ✅ Listo para usar |
+
+**Ventajas concretas:**
+
+1. **Versión alineada:** el tag `v1.62.1` coincide con `@playwright/test@1.62.1` del kit. Playwright exige que la versión de los navegadores coincida con la del paquete; si no, falla con `Executable doesn't exist at ...`.
+2. **Navegadores + dependencias del sistema incluidos:** Chromium, Firefox y WebKit con sus libs en Ubuntu `noble` (glibc). En Alpine (musl), Firefox/WebKit no están soportados y habría que instalar decenas de paquetes del sistema.
+3. **Build reproducible y más rápido tras el primer pull:** evita repetir `npx playwright install --with-deps` en cada reconstrucción, algo costoso detrás de proxy corporativo. También trae Node y `git`.
+4. **Paridad con CI y con la imagen oficial de Microsoft:** menos diferencias entre "funciona en mi máquina" y el pipeline.
+5. **Compatible con el mismo `Dockerfile`:** el uid `1000` existe como `node` en Alpine y como `pwuser` en la imagen Playwright; no hay que cambiar permisos de `/data`.
+
+**Cómo activarla** (elige una de estas dos opciones):
+
+```bash
+# Opción A: persistente, recomendada (raíz del workspace)
+echo 'API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble' >> .env
+docker compose up -d --build qadash-api
+
+# Opción B: puntual
+docker compose build qadash-api \
+  --build-arg API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble
+docker compose up -d qadash-api
+```
+
+> Si después ejecutas `docker compose up -d --build` sin el `API_BASE_IMAGE` en `.env`, Compose reconstruirá con `node:22-alpine`. Monta el kit y ajusta `projectPath` como se indicó arriba. Si tus tests usan un grid Selenium remoto (`SELENIUM_REMOTE_URL`), puedes quedarte con Alpine y no descargar esta imagen.
 
 ---
 
