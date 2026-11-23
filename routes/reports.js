@@ -152,6 +152,154 @@ router.get('/analytics', (req, res) => {
   }
 });
 
+router.get('/analytics/export', (req, res) => {
+  try {
+    const REPORTS_DIR = req.profile.reportsDir;
+    const COLLECTION_PATH = req.profile.collection;
+    let totalAvailable = null;
+    const collectionByFile = {};
+
+    if (fs.existsSync(COLLECTION_PATH)) {
+      try {
+        const col = JSON.parse(fs.readFileSync(COLLECTION_PATH, 'utf-8'));
+        totalAvailable = col.total || 0;
+        for (const [filePath, testIds] of Object.entries(col.files || {})) {
+          const fileName = filePath.replace(/\\/g, '/').split('/').pop();
+          collectionByFile[fileName] = (collectionByFile[fileName] || 0) + testIds.length;
+        }
+      } catch {}
+    }
+
+    const emptySummary = {
+      totalRuns: 0, totalExecutions: 0, totalPassed: 0, totalFailed: 0,
+      passRate: 0, avgDuration: 0,
+      totalAvailable, uniqueExecuted: 0, uniquePassed: 0, uniqueFailed: 0,
+      neverExecuted: totalAvailable,
+      byFile: [], timeline: []
+    };
+
+    if (!fs.existsSync(REPORTS_DIR)) {
+      return res.json({
+        type: 'analytics',
+        generatedAt: new Date().toISOString(),
+        profile: { id: req.profile.id, name: req.profile.name },
+        summary: emptySummary,
+        timeline: [],
+        byFile: [],
+        recentRuns: [],
+        sections: ['cover', 'kpis', 'trend', 'byFile', 'recentRuns', 'footer'],
+        source: 'api-export',
+      });
+    }
+
+    const reportFiles = fs.readdirSync(REPORTS_DIR).filter(f => f.endsWith('.json'));
+    const allReports = [];
+    for (const f of reportFiles) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
+        if (!parsed.id) parsed.id = f.replace('.json', '');
+        allReports.push(parsed);
+      } catch {}
+    }
+    allReports.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    let totalRuns = 0, totalExecutions = 0, totalPassed = 0, totalFailed = 0, totalDuration = 0;
+    const byFileAgg = {};
+    const testLastStatus = {};
+    const timeline = [];
+
+    for (const report of allReports) {
+      totalRuns++;
+      const p = report.summary?.passed || 0;
+      const fa = (report.summary?.failed || 0) + (report.summary?.errors || 0);
+      const tot = report.summary?.total || 0;
+      totalPassed += p;
+      totalFailed += fa;
+      totalExecutions += tot;
+      totalDuration += report.summary?.duration || 0;
+
+      timeline.push({
+        timestamp: report.timestamp,
+        passed: p, failed: fa, total: tot,
+        passRate: tot > 0 ? Math.round((p / tot) * 100) : 0
+      });
+
+      for (const test of (report.tests || [])) {
+        const fileName = (test.id || '').split('::')[0].replace(/\\/g, '/').split('/').pop();
+        if (!byFileAgg[fileName]) byFileAgg[fileName] = { file: fileName, passed: 0, failed: 0, total: 0 };
+        byFileAgg[fileName].total++;
+        if (test.status === 'passed') byFileAgg[fileName].passed++;
+        else byFileAgg[fileName].failed++;
+        testLastStatus[test.id] = test.status;
+      }
+    }
+
+    const lastStatuses = Object.values(testLastStatus);
+    const uniqueExecuted = lastStatuses.length;
+    const uniquePassed = lastStatuses.filter(s => s === 'passed').length;
+    const uniqueFailed = uniqueExecuted - uniquePassed;
+    const neverExecuted = totalAvailable !== null ? Math.max(0, totalAvailable - uniqueExecuted) : null;
+
+    const byFileMap = { ...byFileAgg };
+    for (const fileName of Object.keys(collectionByFile)) {
+      if (!byFileMap[fileName]) byFileMap[fileName] = { file: fileName, passed: 0, failed: 0, total: 0 };
+    }
+
+    const byFileArr = Object.values(byFileMap).map(entry => {
+      const avail = collectionByFile[entry.file] ?? null;
+      let fileUniquePassed = 0, fileUniqueExecuted = 0;
+      for (const [id, status] of Object.entries(testLastStatus)) {
+        const fn = id.split('::')[0].replace(/\\/g, '/').split('/').pop();
+        if (fn === entry.file) {
+          fileUniqueExecuted++;
+          if (status === 'passed') fileUniquePassed++;
+        }
+      }
+      const fileNeverExecuted = avail !== null ? Math.max(0, avail - fileUniqueExecuted) : null;
+      return {
+        file: entry.file,
+        totalAvailable: avail,
+        uniqueExecuted: fileUniqueExecuted,
+        uniquePassed: fileUniquePassed,
+        uniqueFailed: fileUniqueExecuted - fileUniquePassed,
+        neverExecuted: fileNeverExecuted,
+        aggregatePassed: entry.passed,
+        aggregateFailed: entry.failed,
+        aggregateTotal: entry.total
+      };
+    }).sort((a, b) => (b.totalAvailable ?? b.uniqueExecuted) - (a.totalAvailable ?? a.uniqueExecuted));
+
+    const passRate = uniqueExecuted > 0 ? Math.round((uniquePassed / uniqueExecuted) * 100) : 0;
+    const avgDuration = totalRuns > 0 ? totalDuration / totalRuns : 0;
+
+    const summary = {
+      totalRuns, totalExecutions, totalPassed, totalFailed,
+      passRate, avgDuration,
+      totalAvailable, uniqueExecuted, uniquePassed, uniqueFailed, neverExecuted,
+      byFile: byFileArr, timeline
+    };
+
+    const recentRuns = [...allReports]
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 10)
+      .map(r => ({ id: r.id, timestamp: r.timestamp, summary: r.summary }));
+
+    res.json({
+      type: 'analytics',
+      generatedAt: new Date().toISOString(),
+      profile: { id: req.profile.id, name: req.profile.name },
+      summary,
+      timeline,
+      byFile: byFileArr,
+      recentRuns,
+      sections: ['cover', 'kpis', 'trend', 'byFile', 'recentRuns', 'footer'],
+      source: 'api-export',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id/assets/*', (req, res) => {
   try {
     const reportId = req.params.id;
@@ -175,6 +323,34 @@ router.get('/:id', (req, res) => {
     const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
     res.json(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/:id/export', (req, res) => {
+  try {
+    const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+    const report = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const tests = (report.tests || []).map(t => ({
+      ...t,
+      attachments: (t.attachments || []).map(a => ({
+        ...a,
+        kind: a.kind || (String(a.contentType || '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(a.path || a.assetPath || a.name || '')) ? 'image' : 'other'),
+      })),
+    }));
+
+    res.json({
+      type: 'run',
+      generatedAt: new Date().toISOString(),
+      profile: { id: req.profile.id, name: req.profile.name },
+      report: { id: req.params.id, timestamp: report.timestamp },
+      summary: report.summary,
+      tests,
+      sections: ['cover', 'summary', 'tests', 'evidence', 'footer'],
+      source: 'api-export',
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

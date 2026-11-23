@@ -481,9 +481,15 @@ const spec = {
     '/api/reports/analytics': {
       get: { tags: ['Reports'], summary: 'Obtener analítica agregada de reportes', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }], responses: { 200: { description: 'Analítica' } } },
     },
+    '/api/reports/analytics/export': {
+      get: { tags: ['Reports'], summary: 'Exportar payload normalizado de analítica para PDF', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }], responses: { 200: { description: 'Payload de exportación analítica' } } },
+    },
     '/api/reports/{id}': {
       get: { tags: ['Reports'], summary: 'Obtener detalle de un reporte', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }, { $ref: '#/components/parameters/ReportIdPath' }], responses: { 200: { description: 'Reporte' }, 404: { description: 'No encontrado' } } },
       delete: { tags: ['Reports'], summary: 'Eliminar reporte', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }, { $ref: '#/components/parameters/ReportIdPath' }], responses: { 200: { description: 'Eliminado' } } },
+    },
+    '/api/reports/{id}/export': {
+      get: { tags: ['Reports'], summary: 'Exportar payload normalizado de corrida para PDF', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }, { $ref: '#/components/parameters/ReportIdPath' }], responses: { 200: { description: 'Payload de exportación de corrida' }, 404: { description: 'No encontrado' } } },
     },
     '/api/reports/{id}/download/json': {
       get: { tags: ['Reports'], summary: 'Descargar reporte en JSON', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }, { $ref: '#/components/parameters/ReportIdPath' }], responses: { 200: { description: 'Archivo JSON' } } },
