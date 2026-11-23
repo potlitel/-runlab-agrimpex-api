@@ -8,7 +8,7 @@
 #  Playwright dentro del contenedor (trae navegadores + libs del sistema).
 #  Si la descargas luego, puedes reconstruir con:
 #
-#    docker compose build qadash-api \
+#    docker compose build runlabqa-api \
 #      --build-arg API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble
 #
 #  O poniendo API_BASE_IMAGE=... en .env (el compose ya lo reenvía).
@@ -27,7 +27,7 @@ ENV HTTP_PROXY=$HTTP_PROXY \
     NO_PROXY=$NO_PROXY \
     NODE_ENV=production \
     PORT=3001 \
-    QADASH_DATA_DIR=/data \
+    RUNLABQA_DATA_DIR=/data \
     TZ=America/Argentina/Buenos_Aires
 
 # git lo usan los módulos de automatización/self-update.

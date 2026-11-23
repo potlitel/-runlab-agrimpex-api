@@ -12,8 +12,8 @@
 const http = require('http');
 const net = require('net');
 
-const TARGET_HOST = process.env.QADASH_NOVNC_HOST || '127.0.0.1';
-const TARGET_PORT = parseInt(process.env.QADASH_NOVNC_PORT || '7900', 10);
+const TARGET_HOST = process.env.RUNLABQA_NOVNC_HOST || '127.0.0.1';
+const TARGET_PORT = parseInt(process.env.RUNLABQA_NOVNC_PORT || '7900', 10);
 const PREFIX = '/novnc';
 
 function stripPrefix(url) {

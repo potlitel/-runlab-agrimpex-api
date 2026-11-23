@@ -1,4 +1,4 @@
-// qadash-backend/middleware/requireFeature.test.js
+// runlab-agrimpex-api/middleware/requireFeature.test.js
 const { test, mock } = require('node:test');
 const assert = require('node:assert');
 const Module = require('module');

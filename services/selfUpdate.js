@@ -9,8 +9,8 @@ const path = require('path');
 const fs = require('fs');
 
 const BACKEND_DIR = path.resolve(__dirname, '..');
-const FRONTEND_DIR = process.env.QADASH_FRONTEND_DIR
-  || path.resolve(BACKEND_DIR, '..', 'qadash-frontend');
+const FRONTEND_DIR = process.env.RUNLABQA_FRONTEND_DIR
+  || path.resolve(BACKEND_DIR, '..', 'runlab-agrimpex-ui');
 
 const REPOS = [
   { key: 'backend', label: 'Backend', dir: BACKEND_DIR },

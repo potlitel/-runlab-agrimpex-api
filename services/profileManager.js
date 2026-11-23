@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = process.env.QADASH_DATA_DIR || path.join(__dirname, '..');
+const DATA_DIR = process.env.RUNLABQA_DATA_DIR || path.join(__dirname, '..');
 const PROFILES_DIR = path.join(DATA_DIR, 'profiles');
 const INDEX_PATH = path.join(PROFILES_DIR, 'index.json');
 

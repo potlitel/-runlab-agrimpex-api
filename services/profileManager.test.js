@@ -11,7 +11,7 @@ function load(indexObj) {
     fs.writeFileSync(path.join(dir, 'profiles', 'index.json'), JSON.stringify(indexObj));
   }
   delete require.cache[require.resolve('./profileManager')];
-  process.env.QADASH_DATA_DIR = dir;
+  process.env.RUNLABQA_DATA_DIR = dir;
   return { pm: require('./profileManager'), dir };
 }
 

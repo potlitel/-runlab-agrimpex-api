@@ -8,7 +8,7 @@ const {
 } = require('./dockerEnv');
 
 // Estado por perfil: cada perfil corre compose en paralelo con nombre de
-// proyecto namespaced (`-p qadash-<id>`) para no pisar contenedores de otro.
+// proyecto namespaced (`-p runlabqa-<id>`) para no pisar contenedores de otro.
 const state = new Map(); // profileId -> { running, currentProc, currentAction }
 
 function _state(profileId) {
@@ -18,10 +18,10 @@ function _state(profileId) {
 
 // Nombre de proyecto compose por perfil → aísla contenedores/redes/volúmenes.
 function projectName(profile) {
-  return `qadash-${profile.id}`;
+  return `runlabqa-${profile.id}`;
 }
 
-// Argumentos de compose namespaced: docker compose -p qadash-<id> <tail...>
+// Argumentos de compose namespaced: docker compose -p runlabqa-<id> <tail...>
 function composeArgs(profile, tail) {
   return ['compose', '-p', projectName(profile), ...tail];
 }

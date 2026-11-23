@@ -7,18 +7,18 @@
 #
 # Instalacion (cada 5 minutos):
 #   crontab -e
-#   */5 * * * * QADASH_BASE=/ruta/a/tus/repos QADASH_NODE_BIN=/ruta/a/node/bin /ruta/a/qadash-backend/scripts/auto-update.sh
+#   */5 * * * * RUNLABQA_BASE=/ruta/a/tus/repos RUNLABQA_NODE_BIN=/ruta/a/node/bin /ruta/a/runlab-agrimpex-api/scripts/auto-update.sh
 set -uo pipefail
 
-BASE="${QADASH_BASE:-$HOME/qadash}"
-BACKEND="$BASE/qadash-backend"
-FRONTEND="$BASE/qadash-frontend"
-LOG="${QADASH_UPDATE_LOG:-$HOME/.qadash-auto-update.log}"
-LOCK="/tmp/qadash-auto-update.lock"
+BASE="${RUNLABQA_BASE:-$HOME/runlabqa}"
+BACKEND="$BASE/runlab-agrimpex-api"
+FRONTEND="$BASE/runlab-agrimpex-ui"
+LOG="${RUNLABQA_UPDATE_LOG:-$HOME/.runlabqa-auto-update.log}"
+LOCK="/tmp/runlabqa-auto-update.lock"
 
 # cron arranca con un PATH minimo: sin esto no encuentra node, npm ni pm2,
-# que pueden vivir bajo nvm. Apunta QADASH_NODE_BIN a la carpeta bin de node.
-export PATH="${QADASH_NODE_BIN:+$QADASH_NODE_BIN:}/usr/local/bin:/usr/bin:/bin"
+# que pueden vivir bajo nvm. Apunta RUNLABQA_NODE_BIN a la carpeta bin de node.
+export PATH="${RUNLABQA_NODE_BIN:+$RUNLABQA_NODE_BIN:}/usr/local/bin:/usr/bin:/bin"
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 
@@ -83,7 +83,7 @@ fi
 # El backend corre bajo nodemon, que recarga solo al cambiar los archivos. Se
 # reinicia igualmente para que el dist nuevo se sirva sin restos en memoria.
 if [ "$cambio_backend" -eq 0 ] || [ "$cambio_frontend" -eq 0 ]; then
-  pm2 restart qadash-backend --update-env >>"$LOG" 2>&1 && log "qadash-backend reiniciado"
+  pm2 restart runlabqa-api --update-env >>"$LOG" 2>&1 && log "runlabqa-api reiniciado"
 fi
 
 # El log crece indefinidamente si nadie lo toca.

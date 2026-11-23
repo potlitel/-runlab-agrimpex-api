@@ -9,7 +9,7 @@ const express = require('express');
 function server() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffr-'));
   const featuresPath = path.join(dir, 'features.json');
-  process.env.QADASH_DATA_DIR = dir;
+  process.env.RUNLABQA_DATA_DIR = dir;
   delete require.cache[require.resolve('../services/featureFlags')];
   delete require.cache[require.resolve('./features')];
   const app = express();

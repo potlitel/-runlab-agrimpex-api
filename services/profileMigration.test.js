@@ -13,7 +13,7 @@ function setup(files) {
   }
   delete require.cache[require.resolve('./profileManager')];
   delete require.cache[require.resolve('./profileMigration')];
-  process.env.QADASH_DATA_DIR = dir;
+  process.env.RUNLABQA_DATA_DIR = dir;
   return { mig: require('./profileMigration'), dir };
 }
 

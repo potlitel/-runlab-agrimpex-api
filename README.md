@@ -58,7 +58,7 @@ runlab-agrimpex-api (Express + Socket.io, :3001)
 
 - **Multi-perfil:** cada request API (salvo admin de perfiles/sistema) se resuelve con `X-Profile-Id` (`middleware/resolveProfile.js`) y opera sobre el workspace de ese perfil.
 - **Tiempo real:** el cliente se une a la sala `profile:<id>` (`profile:join`) y recibe solo eventos de ese perfil.
-- **Producción:** el backend puede servir el build del frontend (`middleware/serveFrontend.js`, configurable por `QADASH_DIST_DIR`).
+- **Producción:** el backend puede servir el build del frontend (`middleware/serveFrontend.js`, configurable por `RUNLABQA_DIST_DIR`).
 
 ---
 
@@ -101,18 +101,18 @@ npm ci                 # reproducible: usa package-lock.json
 ### 3) Configurar el entorno (opcional)
 
 ```bash
-# Por defecto QADASH_DATA_DIR es la raíz del repo (profiles/ y reportes/).
+# Por defecto RUNLABQA_DATA_DIR es la raíz del repo (profiles/ y reportes/).
 # Si prefieres aislar los datos de runtime:
-export QADASH_DATA_DIR="$PWD/.runtime"
+export RUNLABQA_DATA_DIR="$PWD/.runtime"
 
 # Si quieres que esta API sirva el build de la UI (producción local):
-# export QADASH_DIST_DIR="../runlab-agrimpex-ui/dist"
+# export RUNLABQA_DIST_DIR="../runlab-agrimpex-ui/dist"
 
 # Cambiar puerto (recuerda alinear el proxy de la UI):
 # export PORT=3001
 ```
 
-Al arrancar se aplica la migración de perfiles (`services/profileMigration.js`) y se crea **"Perfil 1"** si aún no existe ninguno. No hay base de datos: todo se persiste como JSON/artefactos en `QADASH_DATA_DIR` (ver [Almacenamiento](#almacenamiento-y-persistencia-sin-base-de-datos)).
+Al arrancar se aplica la migración de perfiles (`services/profileMigration.js`) y se crea **"Perfil 1"** si aún no existe ninguno. No hay base de datos: todo se persiste como JSON/artefactos en `RUNLABQA_DATA_DIR` (ver [Almacenamiento](#almacenamiento-y-persistencia-sin-base-de-datos)).
 
 ### 4) Arrancar la API
 
@@ -168,7 +168,7 @@ Después, en **Tests**, pulsa **Actualizar** para recolectar el catálogo y lanz
 ```bash
 cd ../runlab-agrimpex-ui && npm run build
 cd ../runlab-agrimpex-api
-QADASH_DIST_DIR=../runlab-agrimpex-ui/dist npm start
+RUNLABQA_DIST_DIR=../runlab-agrimpex-ui/dist npm start
 # UI + API en http://localhost:3001
 ```
 
@@ -193,8 +193,8 @@ docker compose ps
 
 | Servicio | Contenedor | URL desde el host | Dentro de la red |
 |---|---|---|---|
-| `qadash-api` | `qadash-api` | <http://localhost:3001> · Swagger `/api/docs/` | `qadash-api:3001` |
-| `qadash-ui` | `qadash-ui` | <http://localhost:3002> | `qadash-ui:3000` |
+| `runlabqa-api` | `runlabqa-api` | <http://localhost:3001> · Swagger `/api/docs/` | `runlabqa-api:3001` |
+| `runlabqa-ui` | `runlabqa-ui` | <http://localhost:3002> | `runlabqa-ui:3000` |
 
 La UI arranca solo después de que la API pase el **healthcheck** (`GET /api/openapi.json` en `:3001`). El `Dockerfile` de la API usa `node:22-alpine` por defecto (ya en caché), instala con `npm ci --omit=dev`, crea `/data` y corre como uid `1000:1000`. La UI usa `Dockerfile.npm` multi-stage y `serve -s dist`.
 
@@ -204,31 +204,31 @@ La UI arranca solo después de que la API pase el **healthcheck** (`GET /api/ope
 docker compose ps
 curl -i http://localhost:3001/api/openapi.json     # 200
 curl -i http://localhost:3002/                     # 200
-docker compose logs -f qadash-api
+docker compose logs -f runlabqa-api
 ```
 
 Resultado ya verificado en este equipo:
 
 ```text
-qadash-api   Up (healthy)   0.0.0.0:3001->3001/tcp
-qadash-ui    Up             0.0.0.0:3002->3000/tcp
+runlabqa-api   Up (healthy)   0.0.0.0:3001->3001/tcp
+runlabqa-ui    Up             0.0.0.0:3002->3000/tcp
 HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Dashboard</title>
 ```
 
 ### 3) Variables y persistencia
 
-- **En tiempo de ejecución** (API): `PORT`, `QADASH_DATA_DIR=/data`, `TZ`, `QADASH_NOVNC_*`, `UPDATE_TOKEN`. Se definen en `docker-compose.yml` / `.env` de la raíz.
+- **En tiempo de ejecución** (API): `PORT`, `RUNLABQA_DATA_DIR=/data`, `TZ`, `RUNLABQA_NOVNC_*`, `UPDATE_TOKEN`. Se definen en `docker-compose.yml` / `.env` de la raíz.
 - **En tiempo de build** (UI): `VITE_API_URL` y `VITE_SOCKET_URL` se **hornean en el bundle**. Deben ser alcanzables desde el **navegador**, no desde el contenedor. Cambiarlos exige reconstruir la UI:
 
 ```bash
-docker compose up -d --build qadash-ui
+docker compose up -d --build runlabqa-ui
 ```
 
-- Persistencia: volumen nombrado **`qadash-data`** en `/data` **+ bind mount** de `./runlab-agrimpex-api/profiles` en `/data/profiles`. `.dockerignore` excluye `profiles/` de la imagen, pero el bind mount lo reincorpora desde el host.
+- Persistencia: volumen nombrado **`runlabqa-data`** en `/data` **+ bind mount** de `./runlab-agrimpex-api/profiles` en `/data/profiles`. `.dockerignore` excluye `profiles/` de la imagen, pero el bind mount lo reincorpora desde el host.
 
 ```bash
 docker compose down       # detiene y conserva todo
-docker compose down -v    # borra qadash-data, PERO NO los perfiles del host
+docker compose down -v    # borra runlabqa-data, PERO NO los perfiles del host
 ```
 
 ### 4) Módulos que necesitan el host
@@ -254,40 +254,109 @@ Para el módulo `/api/docker`, descomenta en `docker-compose.yml`:
 
 ### 5) Conservar los perfiles previos a la dockerización
 
-Los perfiles que ya existían antes del cambio viven en `runlab-agrimpex-api/profiles/` y el compose los monta en `/data/profiles`. Como `profileManager` resuelve `PROFILES_DIR = path.join(QADASH_DATA_DIR, 'profiles')`, la API los lee directamente: **no hay que importarlos ni recrearlos**.
+Los perfiles que ya existían antes del cambio viven en `runlab-agrimpex-api/profiles/` y el compose los monta en `/data/profiles`. Como `profileManager` resuelve `PROFILES_DIR = path.join(RUNLABQA_DATA_DIR, 'profiles')`, la API los lee directamente: **no hay que importarlos ni recrearlos**.
 
 ```bash
-docker compose up -d qadash-api
+docker compose up -d runlabqa-api
 curl -fsS http://localhost:3001/api/profile-admin
 ```
 
 Perfiles esperados: `perfil-1`, `perfil-qa-test-2`, `perfil-1-copia`, `alain`, `jorge` (5 en total). Cada `config.json` conserva su `projectPath`, `playwrightCmd`, entornos, schedules, caché y reportes.
 
-> El `perfil-1` que se creó automáticamente dentro del volumen `qadash-data` queda **oculto** bajo el bind mount; el que manda es `runlab-agrimpex-api/profiles/perfil-1`. Como el mount apunta al repo, `docker compose down -v` ya no borra estos perfiles.
+> El `perfil-1` que se creó automáticamente dentro del volumen `runlabqa-data` queda **oculto** bajo el bind mount; el que manda es `runlab-agrimpex-api/profiles/perfil-1`. Como el mount apunta al repo, `docker compose down -v` ya no borra estos perfiles.
 
 ### 6) Ciclo de vida y equivalente sin Compose
 
 ```bash
-docker compose logs -f qadash-api
-docker compose restart qadash-api
-docker compose exec qadash-api sh
+docker compose logs -f runlabqa-api
+docker compose restart runlabqa-api
+docker compose exec runlabqa-api sh
 docker compose up -d --build        # reconstruir todo
 ```
 
 Equivalente manual (Compose sigue siendo preferible por healthcheck, red y `depends_on`):
 
 ```bash
-docker build -f runlab-agrimpex-api/Dockerfile -t qadash-agrimpex-api runlab-agrimpex-api
-docker run -d --name qadash-api -p 3001:3001 -v qadash-data:/data \
-  --add-host=host.docker.internal:host-gateway qadash-agrimpex-api
+docker build -f runlab-agrimpex-api/Dockerfile -t runlabqa-agrimpex-api runlab-agrimpex-api
+docker run -d --name runlabqa-api -p 3001:3001 -v runlabqa-data:/data \
+  --add-host=host.docker.internal:host-gateway runlabqa-agrimpex-api
 
-docker build -f runlab-agrimpex-ui/Dockerfile.npm -t qadash-agrimpex-ui \
+docker build -f runlab-agrimpex-ui/Dockerfile.npm -t runlabqa-agrimpex-ui \
   --build-arg VITE_API_URL=http://localhost:3001/api \
   --build-arg VITE_SOCKET_URL=http://localhost:3001 runlab-agrimpex-ui
-docker run -d --name qadash-ui -p 3002:3000 qadash-agrimpex-ui
+docker run -d --name runlabqa-ui -p 3002:3000 runlabqa-agrimpex-ui
 ```
 
 Ver [guía completa de onboarding Docker](../docs/ONBOARDING_DOCKER.md).
+
+---
+
+## Docker Compose: referencia detallada
+
+El stack completo se define en **`docker-compose.yml`**, en la raíz del workspace (`qa-dashboard/`). Ese archivo ahora está **bajo control de versiones** en el repo de infraestructura, junto con `.env.example` y `docs/ONBOARDING_DOCKER.md`. La guía definitiva está en el [README raíz](../README.md); aquí se desmenuza lo que afecta a la API.
+
+### Servicio `runlabqa-api`
+
+| Bloque del YAML | Valor / efecto |
+|---|---|
+| `build.context` | `./runlab-agrimpex-api`. Su `.dockerignore` excluye `node_modules`, `profiles/`, reportes y secretos. |
+| `build.dockerfile` | `Dockerfile`: instala con `npm ci --omit=dev`, crea `/data`, corre como uid `1000:1000` y usa healthcheck en `/api/openapi.json`. |
+| `build.args.API_BASE_IMAGE` | `${API_BASE_IMAGE:-node:22-alpine}`. Base opcional Playwright; requiere `--build`. |
+| `build.args.HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Se pasan a `npm ci` durante el build; requieren `--build`. |
+| `image` | `runlabqa-agrimpex-api` (tag local resultante). |
+| `container_name` | `runlabqa-api` (nombre fijo para `docker logs`, `exec`, etc.). |
+| `restart` | `unless-stopped`. |
+| `environment.PORT` | `3001`, fijo para que coincida con healthcheck y `ports`. |
+| `environment.RUNLABQA_DATA_DIR` | `/data`, fijo para que coincida con el volumen. |
+| `environment.RUNLABQA_NOVNC_HOST` / `RUNLABQA_NOVNC_PORT` | `${...:-host.docker.internal}` / `${...:-7900}`. Runtime. |
+| `environment.TZ` | `${TZ:-America/Argentina/Buenos_Aires}`. Afecta a `services/scheduler.js`. |
+| `environment.UPDATE_TOKEN` | `${UPDATE_TOKEN:-}`. Vacío deshabilita `/api/system/update` con 503. |
+| `ports` | `"${API_PORT:-3001}:3001"`. |
+| `volumes[0]` | `runlabqa-data:/data` → persistencia general. |
+| `volumes[1]` | `${RUNLABQA_PROFILES_DIR:-./runlab-agrimpex-api/profiles}:/data/profiles` → perfiles previos a Docker; tiene prioridad sobre el volumen. |
+| `volumes[2]` | `${PLAYWRIGHT_KIT_DIR:-/home/.../playwright-kit-profesional}` montado en **la misma ruta**, para no editar `projectPath`. Escribible por las corridas. |
+| `extra_hosts` | `host.docker.internal:host-gateway` → AUT del host accesible desde el contenedor. |
+| `networks` | `runlabqa-network` (bridge privada compartida con la UI). |
+
+`profileManager.js` resuelve `PROFILES_DIR = path.join(process.env.RUNLABQA_DATA_DIR || '..', 'profiles')`, de modo que el bind mount en `/data/profiles` es exactamente lo que la API lee. Esto es lo que conserva los 5 perfiles (`perfil-1`, `perfil-qa-test-2`, `perfil-1-copia`, `alain`, `jorge`).
+
+### Cómo funcionan los `.env` en este YAML
+
+Resumen rápido: Compose lee **`.env` de la raíz** donde ejecutas `docker compose` y sustituye `${VAR}`; si no existe, usa el default de `${VAR:-default}`. La prioridad es: **variable exportada en la shell → `.env` → default del YAML**.
+
+```bash
+# .env (raíz, NO versionado; plantilla: .env.example)
+API_PORT=3001
+UI_PORT=3002
+RUNLABQA_PROFILES_DIR=./runlab-agrimpex-api/profiles
+TZ=America/Argentina/Buenos_Aires
+```
+
+Puntos clave:
+
+1. **`.env` de la raíz ≠ `.env` del backend.** El de la raíz lo consume Compose; el de `runlab-agrimpex-api/` (si lo usaras en ejecución manual) lo consumes tú al exportar variables. Dentro del contenedor las variables vienen de `environment:` en el compose.
+2. **`build-arg` vs `runtime`.** `API_BASE_IMAGE`, proxies, `VITE_API_URL` y `VITE_SOCKET_URL` se graban en la imagen ⇒ `up -d --build`. `PORT`, `TZ`, `RUNLABQA_NOVNC_*`, `UPDATE_TOKEN`, puertos y montajes son runtime ⇒ basta `up -d` para recrear.
+3. **Sintaxis.** Usa `KEY=VAL` sin espacios ni `export`; comentarios con `#`. Nunca subas `.env`: está en `.gitignore` del repo raíz.
+4. **Override puntual.** `API_PORT=3011 docker compose up -d` gana sobre el `.env`.
+5. **Montajes relativos.** `RUNLABQA_PROFILES_DIR=./runlab-agrimpex-api/profiles` se resuelve relativo al `docker-compose.yml`, no al directorio actual.
+
+### Variables que conviene conocer
+
+| Variable | Default | Fase | Efecto |
+|---|---|---|---|
+| `API_PORT` | `3001` | runtime | Puerto host de la API. |
+| `API_BASE_IMAGE` | `node:22-alpine` | build | Base de la imagen; opcional Playwright. |
+| `RUNLABQA_DATA_DIR` | `/data` | runtime | Raíz de persistencia (fija en compose). |
+| `RUNLABQA_PROFILES_DIR` | `./runlab-agrimpex-api/profiles` | runtime | Origen del bind mount de perfiles. |
+| `PLAYWRIGHT_KIT_DIR` | ruta absoluta del kit | runtime | Kit montado en su ruta original. |
+| `RUNLABQA_NOVNC_HOST` / `_PORT` | `host.docker.internal` / `7900` | runtime | Proxy noVNC. |
+| `TZ` | `America/Argentina/Buenos_Aires` | runtime | Schedules. |
+| `UPDATE_TOKEN` | vacío | runtime | Habilita self-update. |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | vacíos | build | npm dentro del build. |
+
+### Migración desde `qadash-*`
+
+Los recursos antiguos se renombraron a `runlabqa-*`. Si quedaron contenedores/volúmenes viejos, sigue [la sección de migración del README raíz](../README.md#12-migración-desde-los-antiguos-nombres-qadash-). Los perfiles nunca estuvieron en el volumen: viven en `profiles/` y ahora se montan desde el host.
 
 ---
 
@@ -313,12 +382,12 @@ Ver [guía completa de onboarding Docker](../docs/ONBOARDING_DOCKER.md).
 ```bash
 # Opción A: persistente, recomendada (raíz del workspace)
 echo 'API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble' >> .env
-docker compose up -d --build qadash-api
+docker compose up -d --build runlabqa-api
 
 # Opción B: puntual
-docker compose build qadash-api \
+docker compose build runlabqa-api \
   --build-arg API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble
-docker compose up -d qadash-api
+docker compose up -d runlabqa-api
 ```
 
 > Si después ejecutas `docker compose up -d --build` sin el `API_BASE_IMAGE` en `.env`, Compose reconstruirá con `node:22-alpine`. El kit ya está montado en su ruta original (ver [Conservar los perfiles](#5-conservar-los-perfiles-previos-a-la-dockerización)), así que no hay que cambiar `projectPath`. Si tus tests usan un grid Selenium remoto (`SELENIUM_REMOTE_URL`), puedes quedarte con Alpine y no descargar esta imagen.
@@ -332,11 +401,11 @@ docker compose up -d qadash-api
 | Variable | Default | Descripción |
 |---|---|---|
 | `PORT` | `3001` | Puerto HTTP/WS |
-| `QADASH_DATA_DIR` | raíz del backend | Directorio base de datos runtime (perfiles/reportes) |
-| `QADASH_DIST_DIR` | `../qadash-frontend/dist` | Ruta del build del frontend a servir (ajustar al proyecto actual si aplica) |
-| `QADASH_FRONTEND_DIR` | `../qadash-frontend` | Repo frontend (auto-update) |
-| `QADASH_NOVNC_HOST` | `127.0.0.1` | Host noVNC (proxy) |
-| `QADASH_NOVNC_PORT` | `7900` | Puerto noVNC |
+| `RUNLABQA_DATA_DIR` | raíz del backend | Directorio base de datos runtime (perfiles/reportes) |
+| `RUNLABQA_DIST_DIR` | `../runlab-agrimpex-ui/dist` | Ruta del build del frontend a servir |
+| `RUNLABQA_FRONTEND_DIR` | `../runlab-agrimpex-ui` | Repo frontend (auto-update) |
+| `RUNLABQA_NOVNC_HOST` | `127.0.0.1` | Host noVNC (proxy) |
+| `RUNLABQA_NOVNC_PORT` | `7900` | Puerto noVNC |
 | `UPDATE_TOKEN` | *(vacío)* | Token para `/api/system/update` (sin él, el endpoint queda deshabilitado/503) |
 
 > Si cambias `PORT`, alinea el proxy de la UI (`runlab-agrimpex-ui/vite.config.ts`).
@@ -840,18 +909,18 @@ Base: `http://localhost:3001/api` (salvo indicación). Rutas de perfil requieren
 
 ## Almacenamiento y persistencia (sin base de datos)
 
-La API **no utiliza base de datos SQL ni NoSQL**. Toda la persistencia es **filesystem/JSON** y artefactos generados por las ejecuciones (reportes, assets de Playwright, cachés), resueltos a partir de `QADASH_DATA_DIR`.
+La API **no utiliza base de datos SQL ni NoSQL**. Toda la persistencia es **filesystem/JSON** y artefactos generados por las ejecuciones (reportes, assets de Playwright, cachés), resueltos a partir de `RUNLABQA_DATA_DIR`.
 
 ### Ubicación base
 
-- **Variable:** `QADASH_DATA_DIR`
+- **Variable:** `RUNLABQA_DATA_DIR`
 - **Valor por defecto:** raíz del backend (`runlab-agrimpex-api/`)
-- **Directorio principal de trabajo:** `<QADASH_DATA_DIR>/profiles/`
+- **Directorio principal de trabajo:** `<RUNLABQA_DATA_DIR>/profiles/`
 
 ### Estructura en disco
 
 ```text
-<QADASH_DATA_DIR>/
+<RUNLABQA_DATA_DIR>/
 └── profiles/
     ├── index.json                         # Índice global: perfil activo + listado de perfiles
     └── <profileId>/                       # Workspace aislado por perfil
@@ -909,8 +978,8 @@ Hay dos conceptos relacionados pero almacenados en lugares distintos:
 
 ### Configuración del backend y datos operativos
 
-- `.env` del backend (si se usa) define variables como `PORT`, `QADASH_DATA_DIR`, `QADASH_DIST_DIR`, `UPDATE_TOKEN`, etc. (ver sección **Configuración**).
-- `profiles/` es contenido **runtime/local** (típicamente no versionado). `QADASH_DATA_DIR` permite ubicarlo fuera del árbol del repositorio si se desea.
+- `.env` del backend (si se usa) define variables como `PORT`, `RUNLABQA_DATA_DIR`, `RUNLABQA_DIST_DIR`, `UPDATE_TOKEN`, etc. (ver sección **Configuración**).
+- `profiles/` es contenido **runtime/local** (típicamente no versionado). `RUNLABQA_DATA_DIR` permite ubicarlo fuera del árbol del repositorio si se desea.
 - El backend crea/siembra perfiles y archivos base al iniciar/migrar cuando es necesario (`services/profileMigration.js`, `services/profileManager.js`).
 
 ---
@@ -952,7 +1021,7 @@ npm run dev
 | No se generan assets HTML/traces | Depende de la configuración/reporters de Playwright y de que la corrida produzca `playwright-report/` o `test-results/` |
 | 403 en un endpoint | Módulo deshabilitado en `features.json` del perfil |
 | Eventos Socket.io no llegan | Confirmar `profile:join` con el `profileId` correcto y conexión al mismo backend |
-| UI no carga en prod | Revisar `QADASH_DIST_DIR` y que exista el build del frontend |
+| UI no carga en prod | Revisar `RUNLABQA_DIST_DIR` y que exista el build del frontend |
 | `EADDRINUSE` en `3001` | Puerto ocupado; usar `PORT=<otro>` |
 
 ---

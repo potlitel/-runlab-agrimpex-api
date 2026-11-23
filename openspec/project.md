@@ -12,7 +12,7 @@ Backend del dashboard QA para gestionar y ejecutar la suite Playwright de Agrimp
 
 ## Recordatorios pendientes
 
-- **[A4 — despliegue]** `middleware/serveFrontend.js` trae por default `QADASH_DIST_DIR=../qadash-frontend/dist`. Cambiar el default a `../runlab-agrimpex-ui/dist` (hoy se inyecta por variable de entorno). ⏳ Pendiente; recordar al usuario cuando se llegue al change de despliegue.
+- **[A4 — despliegue]** ✅ `middleware/serveFrontend.js` usa por default `RUNLABQA_DIST_DIR=../runlab-agrimpex-ui/dist` (antes apuntaba al repo base). `services/selfUpdate.js` usa `RUNLABQA_FRONTEND_DIR=../runlab-agrimpex-ui`.
 - **[Backlog]** Pre-flight del AUT (healthcheck :5000/:8990 + seed auth) — change A2.
 - **[Backlog dormido]** Webhook al chat, badge shields.io, filtro por task OpenSpec.
 

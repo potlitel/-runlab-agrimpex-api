@@ -9,7 +9,7 @@ const express = require('express');
 function server() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pa-'));
   fs.mkdirSync(path.join(dir, 'profiles'), { recursive: true });
-  process.env.QADASH_DATA_DIR = dir;
+  process.env.RUNLABQA_DATA_DIR = dir;
   ['../services/profileManager', './profileAdmin'].forEach(m => { try { delete require.cache[require.resolve(m)]; } catch {} });
   const app = express();
   app.use(express.json());

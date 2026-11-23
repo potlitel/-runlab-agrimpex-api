@@ -9,12 +9,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
-const DIST = process.env.QADASH_DIST_DIR
-  || path.resolve(__dirname, '..', '..', 'qadash-frontend', 'dist');
+const DIST = process.env.RUNLABQA_DIST_DIR
+  || path.resolve(__dirname, '..', '..', 'runlab-agrimpex-ui', 'dist');
 
 module.exports = function serveFrontend(app) {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) {
-    console.warn(`[frontend] no hay build en ${DIST}; el backend solo servira /api. Ejecuta "npm run build" en qadash-frontend.`);
+    console.warn(`[frontend] no hay build en ${DIST}; el backend solo servira /api. Ejecuta "npm run build" en runlab-agrimpex-ui.`);
     return false;
   }
 
