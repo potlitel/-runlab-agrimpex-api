@@ -178,13 +178,13 @@ RUNLABQA_DIST_DIR=../runlab-agrimpex-ui/dist npm start
 
 ## Ejecución con Docker
 
-Levanta **API + UI** como stack desde la **raíz del workspace** (`qa-dashboard/`), no desde dentro de los repos. No necesitas Node/npm en el host: todo el build ocurre dentro de las imágenes.
+Levanta **API + UI** como stack desde el **repo de la UI** (`qa-dashboard/runlab-agrimpex-ui/`), donde ahora vive el `docker-compose.yml`. No necesitas Node/npm en el host: todo el build ocurre dentro de las imágenes.
 
 ### 1) Arranque estándar
 
 ```bash
-cd /home/potlitel/Trabajo/EICMA/Agrimpex/qa-dashboard   # o: cd .. desde cualquiera de los dos repos
-cp .env.example .env        # opcional: los defaults ya funcionan
+cd /home/potlitel/Trabajo/EICMA/Agrimpex/qa-dashboard/runlab-agrimpex-ui
+cp .env.example.stack .env  # opcional: los defaults ya funcionan
 docker compose up -d --build
 docker compose ps
 ```
@@ -217,14 +217,14 @@ HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Da
 
 ### 3) Variables y persistencia
 
-- **En tiempo de ejecución** (API): `PORT`, `RUNLABQA_DATA_DIR=/data`, `TZ`, `RUNLABQA_NOVNC_*`, `UPDATE_TOKEN`. Se definen en `docker-compose.yml` / `.env` de la raíz.
+- **En tiempo de ejecución** (API): `PORT`, `RUNLABQA_DATA_DIR=/data`, `TZ`, `RUNLABQA_NOVNC_*`, `UPDATE_TOKEN`. Se definen en `docker-compose.yml` / `.env` del repo de la UI.
 - **En tiempo de build** (UI): `VITE_API_URL` y `VITE_SOCKET_URL` se **hornean en el bundle**. Deben ser alcanzables desde el **navegador**, no desde el contenedor. Cambiarlos exige reconstruir la UI:
 
 ```bash
 docker compose up -d --build runlabqa-ui
 ```
 
-- Persistencia: volumen nombrado **`runlabqa-data`** en `/data` **+ bind mount** de `./runlab-agrimpex-api/profiles` en `/data/profiles`. `.dockerignore` excluye `profiles/` de la imagen, pero el bind mount lo reincorpora desde el host.
+- Persistencia: volumen nombrado **`runlabqa-data`** en `/data` **+ bind mount** de `../runlab-agrimpex-api/profiles` en `/data/profiles`. `.dockerignore` excluye `profiles/` de la imagen, pero el bind mount lo reincorpora desde el host.
 
 ```bash
 docker compose down       # detiene y conserva todo
@@ -274,7 +274,8 @@ docker compose exec runlabqa-api sh
 docker compose up -d --build        # reconstruir todo
 ```
 
-Equivalente manual (Compose sigue siendo preferible por healthcheck, red y `depends_on`):
+Equivalente manual (Compose sigue siendo preferible por healthcheck, red y `depends_on`).
+Ejecuta estos comandos desde `qa-dashboard/`, la carpeta que contiene ambos repos:
 
 ```bash
 docker build -f runlab-agrimpex-api/Dockerfile -t runlabqa-agrimpex-api runlab-agrimpex-api
@@ -287,19 +288,19 @@ docker build -f runlab-agrimpex-ui/Dockerfile.npm -t runlabqa-agrimpex-ui \
 docker run -d --name runlabqa-ui -p 3002:3000 runlabqa-agrimpex-ui
 ```
 
-Ver [guía completa de onboarding Docker](../docs/ONBOARDING_DOCKER.md).
+Ver [guía completa de onboarding Docker](../runlab-agrimpex-ui/docs/ONBOARDING_DOCKER.md).
 
 ---
 
 ## Docker Compose: referencia detallada
 
-El stack completo se define en **`docker-compose.yml`**, en la raíz del workspace (`qa-dashboard/`). Ese archivo ahora está **bajo control de versiones** en el repo de infraestructura, junto con `.env.example` y `docs/ONBOARDING_DOCKER.md`. La guía definitiva está en el [README raíz](../README.md); aquí se desmenuza lo que afecta a la API.
+El stack completo se define en **`docker-compose.yml`**, dentro del repo de la UI (`runlab-agrimpex-ui/`), junto con `.env.example.stack` y `docs/ONBOARDING_DOCKER.md`. La guía definitiva está en [RunLab Agrimpex — Orquestación Docker](<../runlab-agrimpex-ui/RunLab Agrimpex — Orquestación Docker.md>); aquí se desmenuza lo que afecta a la API.
 
 ### Servicio `runlabqa-api`
 
 | Bloque del YAML | Valor / efecto |
 |---|---|
-| `build.context` | `./runlab-agrimpex-api`. Su `.dockerignore` excluye `node_modules`, `profiles/`, reportes y secretos. |
+| `build.context` | `../runlab-agrimpex-api`. Su `.dockerignore` excluye `node_modules`, `profiles/`, reportes y secretos. |
 | `build.dockerfile` | `Dockerfile`: instala con `npm ci --omit=dev`, crea `/data`, corre como uid `1000:1000` y usa healthcheck en `/api/openapi.json`. |
 | `build.args.API_BASE_IMAGE` | `${API_BASE_IMAGE:-node:22-alpine}`. Base opcional Playwright; requiere `--build`. |
 | `build.args.HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Se pasan a `npm ci` durante el build; requieren `--build`. |
@@ -313,7 +314,7 @@ El stack completo se define en **`docker-compose.yml`**, en la raíz del workspa
 | `environment.UPDATE_TOKEN` | `${UPDATE_TOKEN:-}`. Vacío deshabilita `/api/system/update` con 503. |
 | `ports` | `"${API_PORT:-3001}:3001"`. |
 | `volumes[0]` | `runlabqa-data:/data` → persistencia general. |
-| `volumes[1]` | `${RUNLABQA_PROFILES_DIR:-./runlab-agrimpex-api/profiles}:/data/profiles` → perfiles previos a Docker; tiene prioridad sobre el volumen. |
+| `volumes[1]` | `${RUNLABQA_PROFILES_DIR:-../runlab-agrimpex-api/profiles}:/data/profiles` → perfiles previos a Docker; tiene prioridad sobre el volumen. |
 | `volumes[2]` | `${PLAYWRIGHT_KIT_DIR:-/home/.../playwright-kit-profesional}` montado en **la misma ruta**, para no editar `projectPath`. Escribible por las corridas. |
 | `extra_hosts` | `host.docker.internal:host-gateway` → AUT del host accesible desde el contenedor. |
 | `networks` | `runlabqa-network` (bridge privada compartida con la UI). |
@@ -322,23 +323,23 @@ El stack completo se define en **`docker-compose.yml`**, en la raíz del workspa
 
 ### Cómo funcionan los `.env` en este YAML
 
-Resumen rápido: Compose lee **`.env` de la raíz** donde ejecutas `docker compose` y sustituye `${VAR}`; si no existe, usa el default de `${VAR:-default}`. La prioridad es: **variable exportada en la shell → `.env` → default del YAML**.
+Resumen rápido: Compose lee el **`.env` del repo de la UI** (junto al compose) y sustituye `${VAR}`; si no existe, usa el default de `${VAR:-default}`. La prioridad es: **variable exportada en la shell → `.env` → default del YAML**.
 
 ```bash
-# .env (raíz, NO versionado; plantilla: .env.example)
+# .env (repo de la UI, NO versionado; plantilla: .env.example.stack)
 API_PORT=3001
 UI_PORT=3002
-RUNLABQA_PROFILES_DIR=./runlab-agrimpex-api/profiles
+RUNLABQA_PROFILES_DIR=../runlab-agrimpex-api/profiles
 TZ=America/Argentina/Buenos_Aires
 ```
 
 Puntos clave:
 
-1. **`.env` de la raíz ≠ `.env` del backend.** El de la raíz lo consume Compose; el de `runlab-agrimpex-api/` (si lo usaras en ejecución manual) lo consumes tú al exportar variables. Dentro del contenedor las variables vienen de `environment:` en el compose.
+1. **`.env` del stack ≠ `.env` del backend.** El `.env` de `runlab-agrimpex-ui/` lo consume Compose; el de `runlab-agrimpex-api/` (si lo usaras en ejecución manual) lo consumes tú al exportar variables. Dentro del contenedor las variables vienen de `environment:` en el compose.
 2. **`build-arg` vs `runtime`.** `API_BASE_IMAGE`, proxies, `VITE_API_URL` y `VITE_SOCKET_URL` se graban en la imagen ⇒ `up -d --build`. `PORT`, `TZ`, `RUNLABQA_NOVNC_*`, `UPDATE_TOKEN`, puertos y montajes son runtime ⇒ basta `up -d` para recrear.
-3. **Sintaxis.** Usa `KEY=VAL` sin espacios ni `export`; comentarios con `#`. Nunca subas `.env`: está en `.gitignore` del repo raíz.
+3. **Sintaxis.** Usa `KEY=VAL` sin espacios ni `export`; comentarios con `#`. Nunca subas `.env`: está en `.gitignore` del repo de la UI.
 4. **Override puntual.** `API_PORT=3011 docker compose up -d` gana sobre el `.env`.
-5. **Montajes relativos.** `RUNLABQA_PROFILES_DIR=./runlab-agrimpex-api/profiles` se resuelve relativo al `docker-compose.yml`, no al directorio actual.
+5. **Montajes relativos.** `RUNLABQA_PROFILES_DIR=../runlab-agrimpex-api/profiles` se resuelve relativo al `docker-compose.yml`, no al directorio actual.
 
 ### Variables que conviene conocer
 
@@ -347,7 +348,7 @@ Puntos clave:
 | `API_PORT` | `3001` | runtime | Puerto host de la API. |
 | `API_BASE_IMAGE` | `node:22-alpine` | build | Base de la imagen; opcional Playwright. |
 | `RUNLABQA_DATA_DIR` | `/data` | runtime | Raíz de persistencia (fija en compose). |
-| `RUNLABQA_PROFILES_DIR` | `./runlab-agrimpex-api/profiles` | runtime | Origen del bind mount de perfiles. |
+| `RUNLABQA_PROFILES_DIR` | `../runlab-agrimpex-api/profiles` | runtime | Origen del bind mount de perfiles. |
 | `PLAYWRIGHT_KIT_DIR` | ruta absoluta del kit | runtime | Kit montado en su ruta original. |
 | `RUNLABQA_NOVNC_HOST` / `_PORT` | `host.docker.internal` / `7900` | runtime | Proxy noVNC. |
 | `TZ` | `America/Argentina/Buenos_Aires` | runtime | Schedules. |
@@ -356,7 +357,7 @@ Puntos clave:
 
 ### Migración desde `qadash-*`
 
-Los recursos antiguos se renombraron a `runlabqa-*`. Si quedaron contenedores/volúmenes viejos, sigue [la sección de migración del README raíz](../README.md#12-migración-desde-los-antiguos-nombres-qadash-). Los perfiles nunca estuvieron en el volumen: viven en `profiles/` y ahora se montan desde el host.
+Los recursos antiguos se renombraron a `runlabqa-*`. Si quedaron contenedores/volúmenes viejos, sigue [la sección de migración de la guía de orquestación](<../runlab-agrimpex-ui/RunLab Agrimpex — Orquestación Docker.md#12-migración-desde-los-antiguos-nombres-qadash->). Los perfiles nunca estuvieron en el volumen: viven en `profiles/` y ahora se montan desde el host.
 
 ---
 
@@ -380,7 +381,7 @@ Los recursos antiguos se renombraron a `runlabqa-*`. Si quedaron contenedores/vo
 **Cómo activarla** (elige una de estas dos opciones):
 
 ```bash
-# Opción A: persistente, recomendada (raíz del workspace)
+# Opción A: persistente, recomendada (repo de la UI)
 echo 'API_BASE_IMAGE=mcr.microsoft.com/playwright:v1.62.1-noble' >> .env
 docker compose up -d --build runlabqa-api
 
