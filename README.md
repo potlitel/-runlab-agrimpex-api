@@ -224,28 +224,48 @@ HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Da
 docker compose up -d --build qadash-ui
 ```
 
-- Persistencia: volumen nombrado **`qadash-data`** montado en `/data` (perfiles, reportes, assets). `.dockerignore` evita copiar el `profiles/` local a la imagen.
+- Persistencia: volumen nombrado **`qadash-data`** en `/data` **+ bind mount** de `./runlab-agrimpex-api/profiles` en `/data/profiles`. `.dockerignore` excluye `profiles/` de la imagen, pero el bind mount lo reincorpora desde el host.
 
 ```bash
-docker compose down       # detiene y conserva qadash-data
-docker compose down -v    # detiene y BORRA perfiles/reportes
+docker compose down       # detiene y conserva todo
+docker compose down -v    # borra qadash-data, PERO NO los perfiles del host
 ```
 
 ### 4) Módulos que necesitan el host
 
-En `docker-compose.yml` hay montajes **comentados** para activarlos cuando haga falta:
+El kit Playwright **ya está montado de forma activa** en la misma ruta absoluta que aparece en los perfiles guardados, así que `projectPath` sigue siendo válido:
+
+```yaml
+- ${PLAYWRIGHT_KIT_DIR:-/home/potlitel/Trabajo/EICMA/Agrimpex/playwright-kit-profesional}:${PLAYWRIGHT_KIT_DIR:-/home/potlitel/Trabajo/EICMA/Agrimpex/playwright-kit-profesional}
+```
+
+> No lleva `:ro` porque las corridas escriben `test-results/` y `playwright-report/` dentro del proyecto. Si solo vas a recolectar el catálogo (`--list`), puedes añadir `:ro`.
+
+Para el módulo `/api/docker`, descomenta en `docker-compose.yml`:
 
 ```yaml
 - /var/run/docker.sock:/var/run/docker.sock
 - /usr/bin/docker:/usr/bin/docker:ro
-- /ruta/al/playwright-kit-profesional:/workspace/playwright-kit-profesional
 ```
 
 - Sin el socket/CLI, el módulo `/api/docker` no puede controlar el daemon del host.
-- El kit **no** se incluye en la imagen. Si vas a ejecutar tests dentro del contenedor, monta el kit y pon `projectPath=/workspace/playwright-kit-profesional`. Usa montaje escribible si la corrida debe generar `test-results/` o `playwright-report/` dentro del proyecto.
+- El kit **no** se incluye en la imagen: sus `node_modules` deben existir en el host.
 - El AUT en `localhost` del host se alcanza como `host.docker.internal` (ya configurado con `extra_hosts: host-gateway`).
 
-### 5) Ciclo de vida y equivalente sin Compose
+### 5) Conservar los perfiles previos a la dockerización
+
+Los perfiles que ya existían antes del cambio viven en `runlab-agrimpex-api/profiles/` y el compose los monta en `/data/profiles`. Como `profileManager` resuelve `PROFILES_DIR = path.join(QADASH_DATA_DIR, 'profiles')`, la API los lee directamente: **no hay que importarlos ni recrearlos**.
+
+```bash
+docker compose up -d qadash-api
+curl -fsS http://localhost:3001/api/profile-admin
+```
+
+Perfiles esperados: `perfil-1`, `perfil-qa-test-2`, `perfil-1-copia`, `alain`, `jorge` (5 en total). Cada `config.json` conserva su `projectPath`, `playwrightCmd`, entornos, schedules, caché y reportes.
+
+> El `perfil-1` que se creó automáticamente dentro del volumen `qadash-data` queda **oculto** bajo el bind mount; el que manda es `runlab-agrimpex-api/profiles/perfil-1`. Como el mount apunta al repo, `docker compose down -v` ya no borra estos perfiles.
+
+### 6) Ciclo de vida y equivalente sin Compose
 
 ```bash
 docker compose logs -f qadash-api
@@ -301,7 +321,7 @@ docker compose build qadash-api \
 docker compose up -d qadash-api
 ```
 
-> Si después ejecutas `docker compose up -d --build` sin el `API_BASE_IMAGE` en `.env`, Compose reconstruirá con `node:22-alpine`. Monta el kit y ajusta `projectPath` como se indicó arriba. Si tus tests usan un grid Selenium remoto (`SELENIUM_REMOTE_URL`), puedes quedarte con Alpine y no descargar esta imagen.
+> Si después ejecutas `docker compose up -d --build` sin el `API_BASE_IMAGE` en `.env`, Compose reconstruirá con `node:22-alpine`. El kit ya está montado en su ruta original (ver [Conservar los perfiles](#5-conservar-los-perfiles-previos-a-la-dockerización)), así que no hay que cambiar `projectPath`. Si tus tests usan un grid Selenium remoto (`SELENIUM_REMOTE_URL`), puedes quedarte con Alpine y no descargar esta imagen.
 
 ---
 
