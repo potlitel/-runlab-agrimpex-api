@@ -35,6 +35,10 @@ app.use('/api/profile-admin', require('./routes/profileAdmin'));
 // perfil, así que va antes de resolveProfile igual que profile-admin.
 app.use('/api/system', require('./routes/system'));
 
+// Salud del proceso: tampoco depende de perfil, para que el healthcheck de
+// Docker funcione aunque no haya ninguno configurado.
+app.use('/api', require('./routes/health'));
+
 // Todas las demás rutas de /api resuelven el perfil del request.
 app.use('/api', resolveProfile);
 

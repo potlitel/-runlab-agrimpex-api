@@ -7,12 +7,13 @@ const spec = {
     version: '1.0.0',
     description:
       'API REST del backend RunLab Agrimpex (QA Dashboard). ' +
-      'Las rutas bajo `/api` (excepto `/api/profile-admin` y `/api/system`) se resuelven por perfil mediante el header `X-Profile-Id`; si no se envía, se usa el perfil activo. ' +
+      'Las rutas bajo `/api` (excepto `/api/health`, `/api/profile-admin` y `/api/system`) se resuelven por perfil mediante el header `X-Profile-Id`; si no se envía, se usa el perfil activo. ' +
       'Algunos módulos pueden responder 403 cuando la feature correspondiente está deshabilitada para el perfil. ' +
       'Los eventos en tiempo real se transmiten por Socket.io (sala `profile:<id>`), fuera de este spec REST.',
   },
   servers: [{ url: `http://localhost:${PORT}`, description: 'Servidor local' }],
   tags: [
+    { name: 'Health', description: 'Estado del backend (no requiere X-Profile-Id)' },
     { name: 'Profile Admin', description: 'Gestión global de perfiles (no requiere X-Profile-Id)' },
     { name: 'System', description: 'Actualización del dashboard/repos (no requiere X-Profile-Id)' },
     { name: 'Config', description: 'Configuración del perfil/proyecto' },
@@ -76,6 +77,53 @@ const spec = {
       },
     },
     schemas: {
+      HealthStatus: {
+        type: 'object',
+        description: 'Liveness del proceso. No consulta filesystem ni configuración de perfil.',
+        required: ['status', 'uptimeSeconds', 'version'],
+        properties: {
+          status: { type: 'string', enum: ['ok', 'degraded', 'unhealthy'] },
+          uptimeSeconds: { type: 'integer', minimum: 0 },
+          version: { type: 'string' },
+        },
+      },
+      HealthCheck: {
+        type: 'object',
+        required: ['id', 'status'],
+        properties: {
+          id: {
+            type: 'string',
+            enum: [
+              'profiles', 'reports', 'evidenceGallery',
+              'profile', 'projectPath', 'playwrightKit', 'scheduler', 'socket', 'dockerGrid',
+            ],
+            description: 'Identificador estable del check; `dockerGrid` corresponde a Docker/Grid.',
+          },
+          status: { type: 'string', enum: ['ok', 'degraded', 'unhealthy', 'not_configured'] },
+          message: { type: 'string', description: 'Mensaje genérico; nunca contiene rutas ni valores de entorno.' },
+        },
+      },
+      HealthDetail: {
+        type: 'object',
+        required: ['status', 'uptimeSeconds', 'checks', 'failedChecks'],
+        properties: {
+          status: { type: 'string', enum: ['ok', 'degraded', 'unhealthy'] },
+          uptimeSeconds: { type: 'integer', minimum: 0 },
+          checks: {
+            type: 'object',
+            required: ['critical', 'informational'],
+            properties: {
+              critical: { type: 'array', items: { $ref: '#/components/schemas/HealthCheck' } },
+              informational: { type: 'array', items: { $ref: '#/components/schemas/HealthCheck' } },
+            },
+          },
+          failedChecks: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Ids con estado `degraded` o `unhealthy`; `not_configured` no cuenta como fallo.',
+          },
+        },
+      },
       Error: {
         type: 'object',
         properties: {
@@ -232,6 +280,42 @@ const spec = {
   },
   security: [{ ProfileId: [] }],
   paths: {
+    '/api/health': {
+      get: {
+        tags: ['Health'],
+        summary: 'Liveness del proceso (healthcheck de Docker)',
+        description: 'Responde sin X-Profile-Id y sin acceder al filesystem; solo confirma que el proceso atiende HTTP.',
+        security: [],
+        responses: {
+          200: {
+            description: 'Proceso atendiendo peticiones',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/HealthStatus' } } },
+          },
+        },
+      },
+    },
+    '/api/health/detail': {
+      get: {
+        tags: ['Health'],
+        summary: 'Readiness con checks críticos e informativos',
+        description:
+          'Responde 200 cuando los checks críticos pasan (`status` `ok` o `degraded`) y 503 si falla alguno (`unhealthy`). ' +
+          'Los checks informativos y `not_configured` nunca cambian el código de respuesta. ' +
+          'Acepta `X-Profile-Id` de forma opcional para elegir el perfil inspeccionado; un id inexistente se ignora y se usa el activo.',
+        security: [],
+        parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }],
+        responses: {
+          200: {
+            description: 'Críticos disponibles; `status` `ok` o `degraded`',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/HealthDetail' } } },
+          },
+          503: {
+            description: 'Fallo crítico; `status` `unhealthy`',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/HealthDetail' } } },
+          },
+        },
+      },
+    },
     '/api/profile-admin': {
       get: {
         tags: ['Profile Admin'],

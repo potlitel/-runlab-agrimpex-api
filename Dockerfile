@@ -54,8 +54,9 @@ USER 1000:1000
 
 EXPOSE 3001
 
-# Barato y sin efectos secundarios (evita /api/system/updates y /profile-admin).
+# Liveness barato y sin efectos secundarios: /api/health no exige perfil ni
+# toca el filesystem, así que un check informativo no reinicia el contenedor.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/openapi.json').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["npm", "start"]

@@ -196,13 +196,15 @@ docker compose ps
 | `runlabqa-api` | `runlabqa-api` | <http://localhost:3001> · Swagger `/api/docs/` | `runlabqa-api:3001` |
 | `runlabqa-ui` | `runlabqa-ui` | <http://localhost:3002> | `runlabqa-ui:3000` |
 
-La UI arranca solo después de que la API pase el **healthcheck** (`GET /api/openapi.json` en `:3001`). El `Dockerfile` de la API usa `node:22-alpine` por defecto (ya en caché), instala con `npm ci --omit=dev`, crea `/data` y corre como uid `1000:1000`. La UI usa `Dockerfile.npm` multi-stage y `serve -s dist`.
+La UI arranca solo después de que la API pase el **healthcheck** (`GET /api/health` en `:3001`). El `Dockerfile` de la API usa `node:22-alpine` por defecto (ya en caché), instala con `npm ci --omit=dev`, crea `/data` y corre como uid `1000:1000`. La UI usa `Dockerfile.npm` multi-stage y `serve -s dist`.
 
 ### 2) Verificación
 
 ```bash
 docker compose ps
-curl -i http://localhost:3001/api/openapi.json     # 200
+curl -i http://localhost:3001/api/health           # 200 (healthcheck)
+curl -i http://localhost:3001/api/health/detail    # 200 o 503 según checks críticos
+curl -i http://localhost:3001/api/openapi.json     # 200 (documentación)
 curl -i http://localhost:3002/                     # 200
 docker compose logs -f runlabqa-api
 ```
@@ -212,7 +214,7 @@ Resultado ya verificado en este equipo:
 ```text
 runlabqa-api   Up (healthy)   0.0.0.0:3001->3001/tcp
 runlabqa-ui    Up             0.0.0.0:3002->3000/tcp
-HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Dashboard</title>
+HTTP 200 /api/health  ·  HTTP 200 /api/openapi.json  ·  HTTP 200 /  ·  <title>RunLab Agrimpex — QA Dashboard</title>
 ```
 
 ### 3) Variables y persistencia
@@ -290,6 +292,29 @@ docker run -d --name runlabqa-ui -p 3002:3000 runlabqa-agrimpex-ui
 
 Ver [guía completa de onboarding Docker](../runlab-agrimpex-ui/docs/ONBOARDING_DOCKER.md).
 
+### 7) Healthcheck y rollback
+
+El healthcheck usa `/api/health` (liveness), no `/api/openapi.json` ni `/api/health/detail`. Así un check informativo degradado no reinicia el contenedor. Comprobación de la señal configurada:
+
+```bash
+docker image inspect runlabqa-agrimpex-api \
+  --format '{{json .Config.Healthcheck.Test}}'
+# debe contener: fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health')
+
+curl -i http://localhost:3001/api/health   # 200 {"status":"ok",...}
+```
+
+Para volver al procedimiento anterior, cambia en `Dockerfile` la URL de `fetch` a `/api/openapi.json`, reconstruye y reinicia:
+
+```bash
+docker compose up -d --build runlabqa-api
+docker image inspect runlabqa-agrimpex-api --format '{{json .Config.Healthcheck.Test}}'
+curl -i http://localhost:3001/api/health        # sigue respondiendo 200
+curl -i http://localhost:3001/api/openapi.json  # 200
+```
+
+`/api/openapi.json` se conserva para documentación con o sin rollback; el change no elimina ningún endpoint previo. La badge de la UI se puede retirar por separado sin afectar a perfiles, reportes ni assets.
+
 ---
 
 ## Docker Compose: referencia detallada
@@ -301,7 +326,7 @@ El stack completo se define en **`docker-compose.yml`**, dentro del repo de la U
 | Bloque del YAML | Valor / efecto |
 |---|---|
 | `build.context` | `../runlab-agrimpex-api`. Su `.dockerignore` excluye `node_modules`, `profiles/`, reportes y secretos. |
-| `build.dockerfile` | `Dockerfile`: instala con `npm ci --omit=dev`, crea `/data`, corre como uid `1000:1000` y usa healthcheck en `/api/openapi.json`. |
+| `build.dockerfile` | `Dockerfile`: instala con `npm ci --omit=dev`, crea `/data`, corre como uid `1000:1000` y usa healthcheck en `/api/health`. |
 | `build.args.API_BASE_IMAGE` | `${API_BASE_IMAGE:-node:22-alpine}`. Base opcional Playwright; requiere `--build`. |
 | `build.args.HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Se pasan a `npm ci` durante el build; requieren `--build`. |
 | `image` | `runlabqa-agrimpex-api` (tag local resultante). |
@@ -827,13 +852,59 @@ runlab-agrimpex-api/
 └── *.test.js                 # Tests (node --test)
 ```
 
-**Orden relevante en `server.js`:** `/api/profile-admin` y `/api/system` se montan **antes** de `resolveProfile`; el resto de `/api` pasa por resolución de perfil y, cuando aplica, por `requireFeature`; el proxy noVNC y el fallback SPA se registran al final.
+**Orden relevante en `server.js`:** `/api/health`, `/api/profile-admin` y `/api/system` se montan **antes** de `resolveProfile`; el resto de `/api` pasa por resolución de perfil y, cuando aplica, por `requireFeature`; el proxy noVNC y el fallback SPA se registran al final.
 
 ---
 
 ## API REST (resumen)
 
 Base: `http://localhost:3001/api` (salvo indicación). Rutas de perfil requieren contexto de perfil vía `X-Profile-Id` (el middleware resuelve `req.profile`).
+
+### Salud (sin `resolveProfile`)
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/health` | Liveness: confirma que el proceso atiende HTTP. No consulta perfiles ni filesystem. |
+| GET | `/health/detail` | Readiness: directorios críticos escribibles + checks informativos. |
+
+Ninguno exige `X-Profile-Id`. En `/health` una cabecera de perfil, aunque sea inválida, se ignora. Respuesta real:
+
+```json
+{"status":"ok","uptimeSeconds":0,"version":"1.0.0"}
+```
+
+`status` es `ok`, `uptimeSeconds` son los segundos desde el arranque y `version` es la versión de la API. El payload no contiene rutas, tokens ni configuración.
+
+`GET /health/detail` responde `200` con `status: "ok"` o `"degraded"`, y `503` con `"unhealthy"` solo si falla un check crítico. Acepta `X-Profile-Id` opcional para inspeccionar otro perfil; si el id no existe se usa el activo. Ejemplo con galería y proyecto sin configurar:
+
+```json
+{
+  "status": "ok",
+  "uptimeSeconds": 42,
+  "checks": {
+    "critical": [
+      {"id": "profiles", "status": "ok"},
+      {"id": "reports", "status": "ok"},
+      {"id": "evidenceGallery", "status": "not_configured", "message": "No configurado"}
+    ],
+    "informational": [
+      {"id": "profile", "status": "ok"},
+      {"id": "projectPath", "status": "not_configured", "message": "No configurado"},
+      {"id": "playwrightKit", "status": "not_configured", "message": "No configurado"},
+      {"id": "scheduler", "status": "not_configured", "message": "Scheduler no iniciado"},
+      {"id": "socket", "status": "not_configured", "message": "Socket.io no disponible"},
+      {"id": "dockerGrid", "status": "not_configured", "message": "Feature Docker deshabilitada"}
+    ]
+  },
+  "failedChecks": []
+}
+```
+
+- **Críticos:** `profiles`, `reports` y `evidenceGallery`. Comprueban existencia y escritura real (archivo oculto `.healthcheck-*` creado y borrado en `finally`). `evidenceGallery` queda `not_configured` si el perfil no define `errorImagesPath`; un directorio ausente o no escribible da `unhealthy` y `503`.
+- **Informativos:** `profile`, `projectPath`, `playwrightKit`, `scheduler`, `socket` y `dockerGrid` (Docker/Grid). Un fallo da `degraded` y se añade el id a `failedChecks`, pero no cambia el código ni reinicia el contenedor.
+- **`not_configured`** no cuenta como fallo en `failedChecks` y nunca debe interpretarse como `unhealthy`.
+- Los checks informativos se cachean 5 segundos; para diagnosticar sin espera se puede fijar `RUNLABQA_HEALTH_CACHE_MS=0`.
+- La respuesta solo expone ids estables y mensajes genéricos: nunca rutas absolutas, tokens, valores de entorno ni mensajes de excepción.
 
 ### Perfil y sistema (sin `resolveProfile` de recursos de test)
 | Método | Ruta | Descripción |

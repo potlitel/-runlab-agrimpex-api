@@ -137,4 +137,8 @@ function start(_io) {
   console.log('[scheduler] iniciado');
 }
 
-module.exports = { loadFrom, saveTo, uid, computeNextRun, trigger, start };
+function isStarted() {
+  return !!io;
+}
+
+module.exports = { loadFrom, saveTo, uid, computeNextRun, trigger, start, isStarted };
