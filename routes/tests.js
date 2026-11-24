@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { collectTests, getCached, setCached } = require('../services/playwrightCollector');
-const { runTests, abortExecution, isRunning } = require('../services/playwrightRunner');
+const { getCached, setCached } = require('../services/playwrightCollector');
+const { abortExecution, isRunning } = require('../services/playwrightRunner');
 const { readEnv } = require('../services/envManager');
 const { getEntorno } = require('../services/profileManager');
 const { ensureGrid } = require('../services/dockerControl');
+const testControl = require('../services/testControl');
 
 function getConfig(req) {
   return JSON.parse(fs.readFileSync(req.profile.config, 'utf-8'));
@@ -61,7 +62,15 @@ router.get('/collect', async (req, res) => {
     const { projectPath } = cfg;
     const runnerCmd = getRunnerCmd(cfg);
     if (!projectPath) return res.status(400).json({ error: 'Project path not configured' });
-    const result = await collectTests(projectPath, runnerCmd);
+    let result;
+    try {
+      result = await testControl.collect(req.profile, runnerCmd);
+    } catch (e) {
+      if (e.code === 'AGENT_OFFLINE') {
+        return res.status(503).json({ error: e.message, workstationId: e.workstationId });
+      }
+      throw e;
+    }
 
     const payload = {
       timestamp: new Date().toISOString(),
@@ -87,7 +96,9 @@ router.get('/collect', async (req, res) => {
 
 router.post('/run', async (req, res) => {
   try {
-    if (isRunning(req.profile.id)) return res.status(409).json({ error: 'Execution already in progress' });
+    if (isRunning(req.profile.id) || testControl.isRemoteRunning(req.profile.id)) {
+      return res.status(409).json({ error: 'Execution already in progress' });
+    }
     const { testIds, profileName, envFile, useDocker, params, paramsByTest, project, grep, workers } = req.body;
     if (!testIds || !testIds.length) return res.status(400).json({ error: 'No tests selected' });
     const cfg = getConfig(req);
@@ -140,20 +151,44 @@ router.post('/run', async (req, res) => {
     if (cfg && cfg.evidence) options.evidence = cfg.evidence;
     options.errorImagesPath = cfg && cfg.errorImagesPath ? cfg.errorImagesPath : '';
 
-    runTests(io, req.profile.id, testIds, projectPath, runnerCmd, envVars, cleanPerTest, req.profile.reportsDir, options);
-    res.json({ success: true, message: `Starting ${testIds.length} tests` });
+    const dispatch = await testControl.run(io, req.profile, {
+      profileId: req.profile.id,
+      testIds,
+      projectPath,
+      runnerCmd,
+      envVars,
+      paramsByTest: cleanPerTest,
+      reportsDir: req.profile.reportsDir,
+      options,
+    });
+    res.json({
+      success: true,
+      message: `Starting ${testIds.length} tests`,
+      transport: dispatch.mode,
+      ...(dispatch.requestId ? { requestId: dispatch.requestId, runId: dispatch.runId, workstationId: dispatch.agentId } : {}),
+    });
   } catch (e) {
+    if (e.code === 'AGENT_OFFLINE') {
+      return res.status(503).json({ error: e.message, workstationId: e.workstationId });
+    }
     res.status(500).json({ error: e.message });
   }
 });
 
-router.post('/abort', (req, res) => {
-  abortExecution(req.profile.id);
-  res.json({ success: true });
+router.post('/abort', async (req, res) => {
+  try {
+    const result = await testControl.abort(req.profile, { profileId: req.profile.id });
+    if (!result.remote) abortExecution(req.profile.id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.code === 'AGENT_OFFLINE' ? 503 : 502).json({ error: e.message });
+  }
 });
 
 router.get('/status', (req, res) => {
-  res.json({ running: isRunning(req.profile.id) });
+  res.json({
+    running: isRunning(req.profile.id) || testControl.isRemoteRunning(req.profile.id),
+  });
 });
 
 router.get('/file', (req, res) => {

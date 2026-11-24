@@ -1,7 +1,8 @@
 const fs = require('fs');
 const { readEnv } = require('./envManager');
-const { runTests, isRunning } = require('./playwrightRunner');
-const { ensureGrid } = require('./dockerControl');
+const { isRunning } = require('./playwrightRunner');
+const dockerControl = require('./dockerControl');
+const testControl = require('./testControl');
 const pm = require('./profileManager');
 
 let io = null;
@@ -75,7 +76,7 @@ function buildEnv(cfg, schedule) {
 async function trigger(schedule, paths, ioOverride) {
   const activeIo = ioOverride || io;
   const pid = paths.id;
-  if (isRunning(pid)) {
+  if (isRunning(pid) || testControl.isRemoteRunning(pid)) {
     emitLog(activeIo, pid, `Programación "${schedule.name}" omitida: ya hay una ejecución en curso en este perfil`, 'error');
     return { ok: false, reason: 'busy' };
   }
@@ -97,8 +98,12 @@ async function trigger(schedule, paths, ioOverride) {
 
   if (schedule.useDocker && cfg.seleniumRemoteUrl) {
     emitLog(activeIo, pid, `"${schedule.name}": levantando Selenium en Docker...`);
-    try { await ensureGrid(activeIo, { ...paths, id: pid }); }
-    catch (e) { emitLog(activeIo, pid, `"${schedule.name}": Docker falló — ${e.message}`, 'error'); }
+    try {
+      await dockerControl.ensureGrid(activeIo, { ...paths, id: pid });
+    } catch (e) {
+      emitLog(activeIo, pid, `"${schedule.name}": Docker falló — ${e.message}`, 'error');
+      return { ok: false, reason: 'grid-failed' };
+    }
   }
 
   const list = loadFrom(paths.schedules);
@@ -108,7 +113,21 @@ async function trigger(schedule, paths, ioOverride) {
   emitLog(activeIo, pid, `▶ Ejecutando programación "${schedule.name}" (${testIds.length} test${testIds.length !== 1 ? 's' : ''})`, 'success');
   if (activeIo) activeIo.to(`profile:${pid}`).emit('schedule:run', { id: schedule.id, name: schedule.name, total: testIds.length, profileId: pid });
 
-  runTests(activeIo, pid, testIds, cfg.projectPath, runnerCmd, env, schedule.paramsByTest || {}, paths.reportsDir);
+  // Mismo selector de transporte que la ruta manual: el grid y la suite van a
+  // la workstation del perfil, nunca a un Playwright de la API.
+  await testControl.run(activeIo, { id: pid, config: paths.config, reportsDir: paths.reportsDir }, {
+    profileId: pid,
+    testIds,
+    projectPath: cfg.projectPath,
+    runnerCmd,
+    envVars: env,
+    paramsByTest: schedule.paramsByTest || {},
+    reportsDir: paths.reportsDir,
+    options: {
+      evidence: cfg.evidence,
+      errorImagesPath: cfg.errorImagesPath || '',
+    },
+  });
   return { ok: true };
 }
 

@@ -3,16 +3,60 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 
+// Las corridas del agente se guardan en `reportsDir/agent/<runId>` para no
+// colisionar con las locales. Estos helper las hacen visibles por los mismos
+// endpoints de siempre, resolviendo el id de la corrida a su reporte.
+function findReportFile(reportsDir, id) {
+  const direct = path.join(reportsDir, `${id}.json`);
+  if (fs.existsSync(direct)) return direct;
+  const agentDir = path.join(reportsDir, 'agent', path.basename(String(id)));
+  if (fs.existsSync(agentDir)) {
+    const json = fs.readdirSync(agentDir).find((f) => f.endsWith('.json'));
+    if (json) return path.join(agentDir, json);
+  }
+  return null;
+}
+
+function findAssetsDir(reportsDir, id) {
+  const direct = path.join(reportsDir, id, 'assets');
+  if (fs.existsSync(direct)) return direct;
+  const agentDir = path.join(reportsDir, 'agent', path.basename(String(id)));
+  if (fs.existsSync(agentDir)) {
+    for (const entry of fs.readdirSync(agentDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = path.join(agentDir, entry.name, 'assets');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function listReportFiles(reportsDir) {
+  const files = fs.existsSync(reportsDir)
+    ? fs.readdirSync(reportsDir)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => ({ id: f.replace(/\.json$/, ''), path: path.join(reportsDir, f) }))
+    : [];
+  const agentRoot = path.join(reportsDir, 'agent');
+  if (fs.existsSync(agentRoot)) {
+    for (const entry of fs.readdirSync(agentRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const reportPath = findReportFile(reportsDir, entry.name);
+      if (reportPath) files.push({ id: entry.name, path: reportPath });
+    }
+  }
+  return files;
+}
+
 router.get('/', (req, res) => {
   try {
     const REPORTS_DIR = req.profile.reportsDir;
     if (!fs.existsSync(REPORTS_DIR)) return res.json([]);
-    const files = fs.readdirSync(REPORTS_DIR)
-      .filter(f => f.endsWith('.json'))
-      .map(f => {
+    const files = listReportFiles(REPORTS_DIR)
+      .map(({ id, path: filePath }) => {
         try {
-          const content = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
-          return { id: f.replace('.json', ''), timestamp: content.timestamp, summary: content.summary };
+          const content = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          return { id, timestamp: content.timestamp, summary: content.summary };
         } catch {
           return null;
         }
@@ -54,13 +98,13 @@ router.get('/analytics', (req, res) => {
 
     if (!fs.existsSync(REPORTS_DIR)) return res.json(empty);
 
-    const reportFiles = fs.readdirSync(REPORTS_DIR).filter(f => f.endsWith('.json'));
-    if (!reportFiles.length) return res.json(empty);
+    const reportPaths = listReportFiles(REPORTS_DIR).map((f) => f.path);
+    if (!reportPaths.length) return res.json(empty);
 
     // ── Load all reports chronologically (last status per test wins) ──
     const allReports = [];
-    for (const f of reportFiles) {
-      try { allReports.push(JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'))); } catch {}
+    for (const filePath of reportPaths) {
+      try { allReports.push(JSON.parse(fs.readFileSync(filePath, 'utf-8'))); } catch {}
     }
     allReports.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
@@ -192,12 +236,12 @@ router.get('/analytics/export', (req, res) => {
       });
     }
 
-    const reportFiles = fs.readdirSync(REPORTS_DIR).filter(f => f.endsWith('.json'));
+    const reportFiles = listReportFiles(REPORTS_DIR);
     const allReports = [];
-    for (const f of reportFiles) {
+    for (const { id, path: filePath } of reportFiles) {
       try {
-        const parsed = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
-        if (!parsed.id) parsed.id = f.replace('.json', '');
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (!parsed.id) parsed.id = id;
         allReports.push(parsed);
       } catch {}
     }
@@ -304,7 +348,9 @@ router.get('/:id/assets/*', (req, res) => {
   try {
     const reportId = req.params.id;
     const relPath = req.params[0] || '';
-    const assetsRoot = path.resolve(req.profile.reportsDir, reportId, 'assets');
+    const found = findAssetsDir(req.profile.reportsDir, reportId);
+    if (!found) return res.status(404).json({ error: 'Asset not found' });
+    const assetsRoot = path.resolve(found);
     const fullPath = path.resolve(assetsRoot, relPath);
     if (!fullPath.startsWith(assetsRoot + path.sep) && fullPath !== assetsRoot) {
       return res.status(403).json({ error: 'Acceso denegado' });
@@ -320,8 +366,8 @@ router.get('/:id/assets/*', (req, res) => {
 
 router.get('/:id', (req, res) => {
   try {
-    const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+    const filePath = findReportFile(req.profile.reportsDir, req.params.id);
+    if (!filePath) return res.status(404).json({ error: 'Report not found' });
     res.json(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -330,8 +376,8 @@ router.get('/:id', (req, res) => {
 
 router.get('/:id/export', (req, res) => {
   try {
-    const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+    const filePath = findReportFile(req.profile.reportsDir, req.params.id);
+    if (!filePath) return res.status(404).json({ error: 'Report not found' });
     const report = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     const tests = (report.tests || []).map(t => ({
       ...t,
@@ -357,15 +403,15 @@ router.get('/:id/export', (req, res) => {
 });
 
 router.get('/:id/download/json', (req, res) => {
-  const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+  const filePath = findReportFile(req.profile.reportsDir, req.params.id);
+  if (!filePath) return res.status(404).json({ error: 'Report not found' });
   res.download(filePath);
 });
 
 router.get('/:id/download/html', (req, res) => {
   try {
-    const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+    const filePath = findReportFile(req.profile.reportsDir, req.params.id);
+    if (!filePath) return res.status(404).json({ error: 'Report not found' });
     const report = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     res.setHeader('Content-Type', 'text/html');
     res.send(generateHtmlReport(report));
@@ -376,8 +422,8 @@ router.get('/:id/download/html', (req, res) => {
 
 router.delete('/:id', (req, res) => {
   try {
-    const filePath = path.join(req.profile.reportsDir, `${req.params.id}.json`);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Report not found' });
+    const filePath = findReportFile(req.profile.reportsDir, req.params.id);
+    if (!filePath) return res.status(404).json({ error: 'Report not found' });
     fs.unlinkSync(filePath);
     res.json({ success: true });
   } catch (e) {

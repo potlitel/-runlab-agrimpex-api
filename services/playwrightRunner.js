@@ -671,7 +671,7 @@ async function runTests(io, profileId, testIds, projectPath, playwrightCmd = 'np
   runtime.start(io, profileId, 'tests');
 
   const startTime = Date.now();
-  const reportId = `report_${Date.now()}`;
+  const reportId = (options && options.reportId) || `report_${Date.now()}`;
   const runAssetsDir = path.join(reportsDir, reportId, 'assets');
   const jsonOutPath = path.join(reportsDir, `${reportId}.result.json`);
   safeMkdir(reportsDir);

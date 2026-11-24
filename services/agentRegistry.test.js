@@ -79,3 +79,69 @@ test('sin agente conectado, request rechaza antes de emitir', async () => {
     /no conectado/
   );
 });
+
+test('2.4 wait:false devuelve requestId y el hook de fallo se llama al desconectar', async () => {
+  registry._reset();
+  const socket = fakeSocket('ws-run');
+  registry.register(socket, { agentId: 'ws-run' });
+
+  const failures = [];
+  const dispatched = await registry.request('ws-run', 'runTests', { id: 'p1' }, {
+    wait: false,
+    onFailure: (err) => failures.push(err.message),
+  });
+  assert.equal(dispatched.dispatched, true);
+  assert.ok(dispatched.requestId);
+
+  registry.unregister(socket);
+  assert.deepEqual(failures, ['Agente ws-run desconectado']);
+});
+
+test('2.4 timeout cierra la petición y dispara onFailure', async () => {
+  registry._reset();
+  const socket = fakeSocket('ws-timeout');
+  registry.register(socket, { agentId: 'ws-timeout' });
+
+  const failures = [];
+  await assert.rejects(
+    registry.request('ws-timeout', 'collect', { id: 'p1' }, {
+      timeout: 10,
+      onFailure: (err) => failures.push(err.message),
+    }),
+    /Timeout esperando al agente ws-timeout \(collect\)/
+  );
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /Timeout/);
+});
+
+test('2.4 un agent:result fallido dispara onFailure en wait:false', async () => {
+  registry._reset();
+  const socket = fakeSocket('ws-error');
+  registry.register(socket, { agentId: 'ws-error' });
+
+  const failures = [];
+  const { requestId } = await registry.request('ws-error', 'runTests', { id: 'p1' }, {
+    wait: false,
+    onFailure: (err) => failures.push(err.message),
+  });
+  registry.resolveResult({ requestId, ok: false, error: 'Playwright no instalado' });
+  assert.deepEqual(failures, ['Playwright no instalado']);
+});
+
+test('2.3 la API redacta claves sensibles en test:output', async () => {
+  registry._reset();
+  const events = [];
+  registry.attach({
+    to: () => ({ emit: (event, payload) => events.push({ event, payload }) }),
+    emit: () => {},
+  });
+  const socket = fakeSocket('ws-redact');
+  registry.register(socket, { agentId: 'ws-redact' });
+  const { requestId } = await registry.request('ws-redact', 'runTests', { id: 'p7' }, { wait: false });
+  registry.forwardEvent({
+    requestId,
+    event: 'test:output',
+    payload: { id: 't1', line: 'API_TOKEN=abc123 y PASSWORD: s3cret' },
+  });
+  assert.equal(events[0].payload.line, 'API_TOKEN=*** y PASSWORD=***');
+});

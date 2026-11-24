@@ -433,6 +433,8 @@ docker compose up -d runlabqa-api
 | `RUNLABQA_NOVNC_HOST` | `127.0.0.1` | Host noVNC (proxy) |
 | `RUNLABQA_NOVNC_PORT` | `7900` | Puerto noVNC |
 | `UPDATE_TOKEN` | *(vacío)* | Token para `/api/system/update` (sin él, el endpoint queda deshabilitado/503) |
+| `RUNLABQA_DOCKER_TRANSPORT` | `agent` | `local` fuerza el modo legado: Docker y Playwright corren en la API con independencia del `workstationId`. |
+| `RUNLABQA_AGENT_TOKEN` | *(vacío)* | Token compartido con los agentes; sin él la API rechaza su conexión. |
 
 > Si cambias `PORT`, alinea el proxy de la UI (`runlab-agrimpex-ui/vite.config.ts`).
 
@@ -440,7 +442,8 @@ docker compose up -d runlabqa-api
 
 | Campo | Descripción |
 |---|---|
-| `projectPath` | Ruta absoluta al proyecto de automatización (kit Playwright) |
+| `projectPath` | Ruta absoluta al proyecto de automatización (kit Playwright), válida en la workstation cuando hay `workstationId` |
+| `workstationId` | ID del agente que atiende este perfil. Con él, Docker y las suites se ejecutan en esa workstation; sin él, se usa la ruta local de la API. |
 | `envPath` | Ruta al `.env` del proyecto |
 | `playwrightCmd` | Comando base Playwright (recomendado, ej. `npx playwright`) |
 | `pytestCmd` | **Deprecado** (compatibilidad/tolerancia legacy) |
@@ -485,6 +488,43 @@ Permite controlar la captura de evidencias por perfil y disponer de una imagen d
 - Los assets (incluida la imagen de vista previa y evidencias por test) se sirven vía `GET /api/reports/:id/assets/*`.
 
 > **Nota:** el override realiza merge de `use` a nivel top-level del config importado. En proyectos que redefinan `screenshot`/`video`/`trace` dentro de `projects[].use`, puede ser necesario ajustar la estrategia de merge para ese caso. Reportes históricos sin `previewImage`/`assetPath` siguen siendo compatibles (la UI muestra un placeholder cuando no hay imagen).
+
+---
+
+## Ejecución remota de tests en la workstation
+
+`services/testControl.js` es el punto único de decisión de transporte para `/api/tests/collect`, `/api/tests/run`, `/api/tests/status` y `/api/tests/abort`, y también para las corridas programadas. Con `workstationId` y agente conectado, la suite se ejecuta en esa workstation; sin ID se mantiene la ejecución local. Si el agente no está registrado, la API responde `503` y **no cae silenciosamente a local**.
+
+### Prerrequisitos de la workstation
+
+- Node.js y acceso al repo `runlab-agrimpex-api` para ejecutar `node agent/index.js`.
+- El kit de Playwright en `projectPath` y sus navegadores instalados: `npx playwright install` (o `npx playwright install --with-deps` en Linux sin librerías del sistema).
+- `RUNLABQA_AGENT_URL`, `RUNLABQA_AGENT_ID` (igual al `workstationId` del perfil) y `RUNLABQA_AGENT_TOKEN` (igual al de la API).
+
+```bash
+# En la workstation:
+RUNLABQA_AGENT_URL=https://dashboard.example.com \
+RUNLABQA_AGENT_ID=ws-a \
+RUNLABQA_AGENT_TOKEN=<token> \
+node agent/index.js
+
+# En la API, verificar que el agente está registrado:
+curl -H 'X-Profile-Id: <id>' http://localhost:3001/api/docker/agents
+```
+
+### Contrato `collect` / `runTests` / `abort`
+
+| Operación | Envío | Resultado |
+| --- | --- | --- |
+| `collect` | `agent:command` con `args.projectPath` y `args.runnerCmd` (timeout 60 s) | `agent:result` con `files`, `total` y `projects`; error explícito si falta Playwright. |
+| `runTests` | `agent:command` con `wait:false`: entorno resuelto, `testIds`, opciones y `runId` | Progreso por `agent:event` (`execution:*`, `test:*`, `progress`, `test:output`) con el `requestId`; `agent:result` final con `reportId`, `summary` y `manifest`. |
+| `abort` | `agent:command` con `args.requestId` (timeout 10 s) | Cancela la corrida y emite `execution:aborted`. |
+
+El agente redacta los valores de entorno en `test:output` y la API aplica una segunda redacción de claves `TOKEN|PASSWORD|SECRET|KEY`. La API escribe el manifiesto en `reportsDir/agent/<runId>` validando rutas relativas, extensiones, 10 MB por archivo y 50 MB por corrida; los reportes siguen disponibles en `/api/reports` y `/api/reports/:id/assets/*`.
+
+### Rollback
+
+`RUNLABQA_DOCKER_TRANSPORT=local` en el entorno de la API (y recrear el contenedor) restaura el modo anterior por completo: todas las suites corren en el servidor y se ignora `workstationId`. Los artefactos ya transferidos permanecen en el perfil; las corridas en curso se abortan al desconectar el agente.
 
 ---
 
