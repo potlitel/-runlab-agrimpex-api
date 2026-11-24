@@ -37,6 +37,15 @@ app.use('/api/profile-admin', require('./routes/profileAdmin'));
 // Actualización del propio dashboard: opera sobre los repos, no sobre un
 // perfil, así que va antes de resolveProfile igual que profile-admin.
 app.use('/api/system', require('./routes/system'));
+app.use('/api/system', require('./routes/stackConfig'));
+
+// Publicar el recurso de configuración en runtime también al arrancar, para
+// que la UI pueda leerlo aunque todavía no se haya guardado nada.
+try {
+  require('./services/stackConfig').publishPublicConfig();
+} catch (e) {
+  console.warn('[stack-config] no se pudo publicar la configuración pública:', e.message);
+}
 
 // Salud del proceso: tampoco depende de perfil, para que el healthcheck de
 // Docker funcione aunque no haya ninguno configurado.
