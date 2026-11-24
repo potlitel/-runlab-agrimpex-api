@@ -508,6 +508,32 @@ Cada entrada incluye `avatar: { "style": "...", "seed": "..." }`. El backend val
 - **Duplicado:** `POST /api/profile-admin/{id}/duplicate` hereda el avatar del origen salvo que se envíe otro válido.
 - **Perfiles heredados:** si una entrada antigua no tiene avatar, se expone `{ style: "notionists", seed: <id> }` de forma determinista y se escribe en el índice en la siguiente mutación.
 
+**Persistencia a nivel de fichero.** No se crea ningún fichero de imagen: `services/profileManager.js` escribe el objeto `avatar` dentro de cada entrada de `<RUNLABQA_DATA_DIR>/profiles/index.json`, junto a `id`, `name` y `createdAt`. Los ficheros `<id>/config.json`, `features.json`, etc. no contienen el avatar; no hay `profiles/<id>/avatar.svg`, PNG, ni data URIs guardadas en disco.
+
+```json
+{
+  "activeProfileId": "perfil-1",
+  "profiles": [
+    {
+      "id": "perfil-1",
+      "name": "Perfil 1 - potlitel",
+      "createdAt": "2026-10-29T14:27:58.315Z",
+      "avatar": { "style": "notionists", "seed": "perfil-1" }
+    }
+  ]
+}
+```
+
+- **Ruta:** `runlab-agrimpex-api/profiles/index.json` por defecto; en el stack Docker, `/data/profiles/index.json` mediante bind mount desde el host (ver [Almacenamiento y persistencia](#almacenamiento-y-persistencia-sin-base-de-datos)).
+- **Escritura:** `readIndex()` normaliza avatares ausentes o inválidos al leer; `writeIndex()` escribe el índice completo en la siguiente mutación (crear, actualizar/renombrar, activar, duplicar, borrar o cambiar settings). No hay escritura diferida de imágenes.
+- **Duplicados:** heredan el mismo par `{ style, seed }` salvo override explícito, así que varios perfiles pueden compartir avatar.
+
+**Cómo se obtiene la imagen**
+
+- La UI importa los 4 JSON de estilos de DiceBear (`notionists`, `lorelei`, `micah`, `bottts`) embebidos en el bundle; no hay peticiones a servicios externos.
+- `avatarToDataUri()` en `src/lib/profile-avatar.ts` (repo de la UI) construye en memoria un `data:image/svg+xml…` de 128 px usando `style`, `seed` y un color de fondo derivado del propio `seed`.
+- Ese data URI solo vive en el render; nunca se envía ni se guarda. La API valida y persiste únicamente `style` y `seed` (`services/profileManager.js:validateAvatar`, `seed` de 1 a 64 caracteres).
+
 #### Ejemplos prácticos de perfiles
 
 1. **Separar entornos/configuraciones del mismo proyecto**  
@@ -1030,7 +1056,7 @@ La API **no utiliza base de datos SQL ni NoSQL**. Toda la persistencia es **file
 
 | Ruta / dato | Contenido | Quién lo gestiona / lo usa |
 |---|---|---|
-| `profiles/index.json` | `{ activeProfileId, profiles[] }` con metadatos de perfiles (`id`, `name`, fechas, etc.) | `services/profileManager.js`, rutas `/api/profile-admin` |
+| `profiles/index.json` | `{ activeProfileId, profiles[] }` con metadatos de perfiles (`id`, `name`, `createdAt`, `avatar: { style, seed }`, etc.). Aquí vive el avatar; no hay ficheros de imagen | `services/profileManager.js`, rutas `/api/profile-admin` |
 | `profiles/<id>/config.json` | Configuración del perfil: `projectPath`, `envPath`, `playwrightCmd` (preferido), `pytestCmd` (legacy/deprecado), `seleniumRemoteUrl`, rutas de datos/evidencias | `/api/config`, `services/profileManager.js` |
 | `profiles/<id>/automation-config.json` | Configuración de automatización: `repoUrl`, `installPath` | `/api/automation`, `services/profileManager.js` |
 | `profiles/<id>/features.json` | Flags de módulos (`variables`, `reports`, `txtData`, `jsonData`, `errorImages`, `docker`, `schedules`) | `/api/features`, `middleware/requireFeature.js` |
