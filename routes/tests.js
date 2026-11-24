@@ -6,7 +6,7 @@ const { collectTests, getCached, setCached } = require('../services/playwrightCo
 const { runTests, abortExecution, isRunning } = require('../services/playwrightRunner');
 const { readEnv } = require('../services/envManager');
 const { getEntorno } = require('../services/profileManager');
-const { ensureGrid } = require('../services/dockerRunner');
+const { ensureGrid } = require('../services/dockerControl');
 
 function getConfig(req) {
   return JSON.parse(fs.readFileSync(req.profile.config, 'utf-8'));

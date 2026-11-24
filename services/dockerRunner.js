@@ -46,6 +46,9 @@ function status(profile) {
 }
 
 function readProjectPath(profile) {
+  // El agente recibe el projectPath desde la API central (vive en la
+  // workstation), así que no tiene el config.json del perfil en su disco.
+  if (profile && profile.projectPath) return profile.projectPath;
   try {
     const cfg = JSON.parse(fs.readFileSync(profile.config, 'utf-8'));
     return cfg.projectPath || '';

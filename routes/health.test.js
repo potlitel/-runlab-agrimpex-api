@@ -9,6 +9,8 @@ const express = require('express');
 const ORIGINAL_DATA_DIR = process.env.RUNLABQA_DATA_DIR;
 // Caché desactivada: cada petición debe reflejar el estado montado por el test.
 process.env.RUNLABQA_HEALTH_CACHE_MS = '0';
+// Estos checks son de filesystem local; el modo agente se prueba aparte.
+process.env.RUNLABQA_DOCKER_TRANSPORT = 'local';
 
 function server(dataDir) {
   if (dataDir) process.env.RUNLABQA_DATA_DIR = dataDir;

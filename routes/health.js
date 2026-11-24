@@ -2,8 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
+const agentRegistry = require('../services/agentRegistry');
 
 const router = express.Router();
+const AGENT_TRANSPORT = process.env.RUNLABQA_DOCKER_TRANSPORT !== 'local';
 
 // Versión estática, alineada con swagger.js. Se evita leer package.json en la
 // ruta de liveness: este endpoint solo confirma que el proceso atiende HTTP.
@@ -128,16 +130,22 @@ function computeInformationalChecks(req) {
   const cfg = paths ? readConfig(paths) : {};
   const projectPath = typeof cfg.projectPath === 'string' ? cfg.projectPath.trim() : '';
 
+  // En modo agente la ruta existe en la workstation, no en el servidor: el
+  // backend no puede verificarla y delega el diagnóstico al panel /docker.
   const projectCheck = !projectPath
     ? check('projectPath', 'not_configured', MESSAGES.notConfigured)
-    : isDirectory(projectPath)
-      ? check('projectPath', 'ok')
-      : check('projectPath', 'degraded', MESSAGES.projectMissing);
+    : AGENT_TRANSPORT
+      ? check('projectPath', 'not_configured', 'Ruta verificada en la workstation')
+      : isDirectory(projectPath)
+        ? check('projectPath', 'ok')
+        : check('projectPath', 'degraded', MESSAGES.projectMissing);
   const kitCheck = !projectPath
     ? check('playwrightKit', 'not_configured', MESSAGES.notConfigured)
-    : hasAnyFile(projectPath, PLAYWRIGHT_CONFIG_FILES)
-      ? check('playwrightKit', 'ok')
-      : check('playwrightKit', 'degraded', MESSAGES.kitMissing);
+    : AGENT_TRANSPORT
+      ? check('playwrightKit', 'not_configured', 'Kit verificado en la workstation')
+      : hasAnyFile(projectPath, PLAYWRIGHT_CONFIG_FILES)
+        ? check('playwrightKit', 'ok')
+        : check('playwrightKit', 'degraded', MESSAGES.kitMissing);
   const schedulerCheck = schedulerStarted()
     ? check('scheduler', 'ok')
     : check('scheduler', 'not_configured', MESSAGES.schedulerOff);
@@ -150,6 +158,13 @@ function computeInformationalChecks(req) {
   let dockerCheck;
   if (!paths || flags.docker === false) {
     dockerCheck = check('dockerGrid', 'not_configured', MESSAGES.gridDisabled);
+  } else if (AGENT_TRANSPORT) {
+    const agentId = cfg.workstationId || '';
+    dockerCheck = !agentId
+      ? check('dockerGrid', 'not_configured', 'Workstation no asignada')
+      : agentRegistry.isOnline(agentId)
+        ? check('dockerGrid', 'ok')
+        : check('dockerGrid', 'degraded', `Agente ${agentId} no conectado`);
   } else if (!remoteUrl) {
     dockerCheck = check('dockerGrid', 'not_configured', MESSAGES.gridMissing);
   } else {

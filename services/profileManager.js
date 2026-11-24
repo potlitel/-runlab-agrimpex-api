@@ -8,6 +8,7 @@ const INDEX_PATH = path.join(PROFILES_DIR, 'index.json');
 const DEFAULT_CONFIG = {
   projectPath: '', envPath: '', playwrightCmd: 'npx playwright', pytestCmd: 'pytest',
   txtFolderPath: '', seleniumRemoteUrl: '', errorImagesPath: '', jsonDataPath: '',
+  workstationId: '',
 };
 const DEFAULT_FEATURES = {
   variables: true, reports: true, txtData: true, jsonData: true,

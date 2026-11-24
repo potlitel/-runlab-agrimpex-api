@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { readEnv } = require('./envManager');
 const { runTests, isRunning } = require('./playwrightRunner');
-const { ensureGrid } = require('./dockerRunner');
+const { ensureGrid } = require('./dockerControl');
 const pm = require('./profileManager');
 
 let io = null;
@@ -97,7 +97,7 @@ async function trigger(schedule, paths, ioOverride) {
 
   if (schedule.useDocker && cfg.seleniumRemoteUrl) {
     emitLog(activeIo, pid, `"${schedule.name}": levantando Selenium en Docker...`);
-    try { await ensureGrid(activeIo, paths); }
+    try { await ensureGrid(activeIo, { ...paths, id: pid }); }
     catch (e) { emitLog(activeIo, pid, `"${schedule.name}": Docker falló — ${e.message}`, 'error'); }
   }
 

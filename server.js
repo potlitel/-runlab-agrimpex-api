@@ -1,11 +1,13 @@
 const express = require('express');
 const http = require('http');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const requireFeature = require('./middleware/requireFeature');
 const resolveProfile = require('./middleware/resolveProfile');
 const swaggerSpec = require('./swagger');
+const agentRegistry = require('./services/agentRegistry');
 
 const app = express();
 const server = http.createServer(app);
@@ -27,6 +29,7 @@ if (pm.listProfiles().length === 0) {
 }
 
 app.set('io', io);
+agentRegistry.attach(io);
 
 // Gestión de perfiles: NO pasa por resolveProfile (opera sobre perfiles en sí).
 app.use('/api/profile-admin', require('./routes/profileAdmin'));
@@ -66,7 +69,47 @@ require('./middleware/novncProxy')(app, server);
 // que no sea /api ni /socket.io, asi que registrarlo antes se tragaria la API.
 require('./middleware/serveFrontend')(app);
 
+function tokenMatches(actual, expected) {
+  if (!expected) return false;
+  const a = Buffer.from(String(actual || ''));
+  const b = Buffer.from(String(expected));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 io.on('connection', (socket) => {
+  const auth = socket.handshake.auth || {};
+
+  // Agentes de workstation: conexión saliente, autenticada por token.
+  // El daemon Docker permanece en la workstation; aquí solo se registran.
+  if (auth.role === 'agent') {
+    const agentId = String(auth.agentId || '');
+    const validId = /^[A-Za-z0-9._-]{1,64}$/.test(agentId);
+    if (!validId || !tokenMatches(auth.token, process.env.RUNLABQA_AGENT_TOKEN)) {
+      socket.emit('agent:error', {
+        error: process.env.RUNLABQA_AGENT_TOKEN
+          ? 'Credenciales de agente inválidas'
+          : 'RUNLABQA_AGENT_TOKEN no configurado en la API',
+      });
+      socket.disconnect(true);
+      return;
+    }
+    try {
+      agentRegistry.register(socket, auth);
+      console.log('[agent] conectado', agentId);
+    } catch (e) {
+      socket.emit('agent:error', { error: e.message });
+      socket.disconnect(true);
+      return;
+    }
+    socket.on('agent:event', agentRegistry.forwardEvent);
+    socket.on('agent:result', agentRegistry.resolveResult);
+    socket.on('disconnect', () => {
+      agentRegistry.unregister(socket);
+      console.log('[agent] desconectado', agentId);
+    });
+    return;
+  }
+
   console.log('Client connected:', socket.id);
   // El cliente se une a la sala del/los perfil(es) que quiere monitorear.
   socket.on('profile:join', (id) => { if (id) socket.join(`profile:${id}`); });

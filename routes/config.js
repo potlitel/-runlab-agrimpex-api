@@ -223,7 +223,7 @@ router.post('/', (req, res) => {
     const {
       projectPath, envPath, playwrightCmd, pytestCmd,
       txtFolderPath, seleniumRemoteUrl, errorImagesPath, jsonDataPath,
-      evidence
+      workstationId, evidence
     } = req.body;
 
     let prevProjectPath = '';
@@ -282,6 +282,7 @@ router.post('/', (req, res) => {
       playwrightCmd: playwrightCmd !== undefined ? playwrightCmd : (prevPlaywrightCmd || ''),
       pytestCmd: pytestCmd !== undefined ? pytestCmd : prevPytestCmd,
       txtFolderPath: txtFolderPath !== undefined ? txtFolderPath : prevTxtFolderPath,
+      workstationId: workstationId !== undefined ? workstationId : (prevConfig.workstationId || ''),
       seleniumRemoteUrl: seleniumRemoteUrl !== undefined ? seleniumRemoteUrl : prevSeleniumRemoteUrl,
       errorImagesPath: errorImagesPath !== undefined ? errorImagesPath : prevErrorImagesPath,
       jsonDataPath: jsonDataPath !== undefined ? jsonDataPath : prevJsonDataPath,
