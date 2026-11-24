@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const { EVIDENCE_MANIFEST } = require('../services/playwrightRunner');
 
 const IMG_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 const VIDEO_EXT = new Set(['.webm', '.mp4']);
@@ -63,27 +64,38 @@ function collectFolderItems(req, folder) {
   if (!folder || !fs.existsSync(folder)) return [];
   let entries = [];
   try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return []; }
+  let manifestItems = {};
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(folder, EVIDENCE_MANIFEST), 'utf-8'));
+    manifestItems = (manifest && manifest.items) || {};
+  } catch { /* reportes antiguos no tienen manifiesto */ }
   const items = [];
   for (const ent of entries) {
     if (!ent.isFile()) continue;
     const name = ent.name;
     if (!isEvidenceFile(name)) continue;
+    const meta = manifestItems[name] || {};
     const st = safeStat(path.join(folder, name));
     const kind = evidenceKind(name);
     items.push({
       id: `folder:${name}`,
       name,
-      displayName: name,
+      displayName: meta.displayName || name,
       kind,
       source: 'folder',
       mtime: st ? st.mtimeMs : 0,
       timestamp: st ? new Date(st.mtimeMs).toISOString() : null,
       size: st ? st.size : 0,
-      reportId: null,
-      reportTimestamp: null,
-      testId: null,
-      status: null,
-      assetPath: null,
+      reportId: meta.reportId || null,
+      reportTimestamp: meta.reportTimestamp || null,
+      testId: meta.testId || null,
+      status: meta.status || null,
+      evidenceSource: meta.evidenceSource || null,
+      captureName: meta.name || null,
+      contentType: meta.contentType || null,
+      assetPath: meta.assetPath || null,
+      width: meta.width ?? null,
+      height: meta.height ?? null,
       url: `/api/errors/file?name=${encodeURIComponent(name)}`,
       downloadUrl: `/api/errors/file?name=${encodeURIComponent(name)}`,
     });
@@ -104,9 +116,9 @@ function collectReportItems(req) {
     const reportTimestamp = report.timestamp || null;
     const reportTsMs = reportTimestamp ? new Date(reportTimestamp).getTime() : rf.mtime;
 
-    // 1) Adjuntos de tests fallidos/error con assetPath
+    // 1) Capturas de tests passed/failed/error con assetPath
     for (const test of (report.tests || [])) {
-      if (test.status !== 'failed' && test.status !== 'error') continue;
+      if (!['passed', 'failed', 'error'].includes(test.status)) continue;
       const atts = Array.isArray(test.attachments) ? test.attachments : [];
       for (let i = 0; i < atts.length; i++) {
         const att = atts[i] || {};
@@ -134,8 +146,12 @@ function collectReportItems(req) {
           reportTimestamp,
           testId: test.id || null,
           status: test.status,
+          evidenceSource: att.evidenceSource || (kind === 'image' ? 'capture' : 'failure-artifact'),
+          captureName: att.name || null,
           assetPath,
           contentType: att.contentType || null,
+          width: att.width ?? null,
+          height: att.height ?? null,
           url: assetUrl,
           downloadUrl: assetUrl,
         });
@@ -241,3 +257,7 @@ router.get('/image', (req, res) => serveFolderFile(req, res, IMG_EXT));
 router.get('/file', (req, res) => serveFolderFile(req, res, EVIDENCE_EXT));
 
 module.exports = router;
+// Helpers expuestos para pruebas del contrato de evidencia.
+module.exports.collectFolderItems = collectFolderItems;
+module.exports.collectReportItems = collectReportItems;
+module.exports.evidenceKind = evidenceKind;

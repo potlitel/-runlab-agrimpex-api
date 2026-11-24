@@ -439,9 +439,13 @@ Permite controlar la captura de evidencias por perfil y disponer de una imagen d
 | `video` | `on` \| `off` \| `retain-on-failure` \| `on-first-retry` | Grabación de video. |
 | `trace` | `on` \| `off` \| `retain-on-failure` \| `on-first-retry` | Captura de trazas. |
 | `fullPage` | `boolean` | Si es `true` y la captura de screenshots está activa, se usa screenshot de página completa (`fullPage`). |
+| `imageFormat` | `png` \| `jpeg` \| `jpg` | Formato de las capturas del helper del kit. Default: `png` (`jpg` se normaliza a `jpeg`). |
+| `imageQuality` | `1`–`100` | Calidad JPEG. Default: `90`; se ignora para PNG. |
+| `scale` | `css` \| `device` | Escala del screenshot. Default: `css`. |
 
 - **`POST /api/config`** acepta, normaliza y persiste `evidence` en la config del perfil (omitirlo o dejar sin campos efectivos conserva/limpia según corresponda, manteniendo compatibilidad con configs previas).
 - **`routes/tests.js`** pasa `cfg.evidence` en las opciones de ejecución a `runTests`.
+- **`services/playwrightRunner.js`** inyecta los campos anteriores como `RUNLAB_SCREENSHOT_FORMAT`, `RUNLAB_SCREENSHOT_QUALITY`, `RUNLAB_SCREENSHOT_SCALE` y `RUNLAB_SCREENSHOT_TIMEOUT` (este último con default `30000`, sin campo en la UI). El perfil gana sobre variables genéricas del entorno; los valores efectivos se registran en el log `Evidencia efectiva: ...` y en `report.evidenceEnv`.
 
 **Override de ejecución (runner):**
 - `services/playwrightRunner.js` detecta el archivo de configuración Playwright del proyecto (`playwright.config.{ts,mts,cts,js,mjs,cjs}`).
@@ -1205,12 +1209,19 @@ flowchart LR
       "duration": 3.21,
       "output": "",
       "errorMsg": "",
+      "expectedScreenshots": ["screenshot-login-credenciales-validas"],
       "attachments": [
         {
-          "name": "screenshot",
+          "name": "screenshot-login-credenciales-validas",
           "contentType": "image/png",
           "path": "/abs/path/proyecto/test-results/.../test-finished-1.png",
-          "assetPath": "test-results/login-Login-inicia-sesión-con-credenciales-válidas-chromium/test-finished-1.png"
+          "assetPath": "test-results/login-Login-inicia-sesión-con-credenciales-válidas-chromium/test-finished-1.png",
+          "status": "passed",
+          "source": "report",
+          "evidenceSource": "capture",
+          "captureName": "screenshot-login-credenciales-validas",
+          "width": 1280,
+          "height": 720
         }
       ],
       "project": "chromium"
@@ -1231,6 +1242,29 @@ flowchart LR
 ```
 
 > `summary.previewImage` y `assetPath` se generan cuando el runner puede mapear adjuntos a assets copiados del run. La UI consume `previewImage` para la miniatura del historial y `assetPath` para mostrar evidencias por test (servidas por `/api/reports/:id/assets/*`). Los adjuntos de reportes históricos pueden no incluir `assetPath`.
+
+#### Contrato de evidencia publicada
+
+- Los adjuntos de imagen que llegan solo con `body` se escriben en `<runAssetsDir>/attachments/`; el runner detecta el formato por firma de bytes y completa `path`, `assetPath`, `name` y `contentType`. Un adjunto con `path` válido se conserva sin copiarlo.
+- Cada adjunto servible de un test `passed`, `failed` o `error` lleva `status`, `source: 'report'`, `evidenceSource` (`capture` para capturas declaradas; `failure-artifact` para `screenshot`/`trace`/vídeo automáticos), `captureName` y, cuando se pueden leer de la cabecera, `width`/`height`.
+- `expectedScreenshots` recoge las anotaciones `expected-screenshot` del test. Si una captura declarada no se adjunta, o un adjunto declarado como imagen tiene bytes no válidos, se registra en `report.integrity` (`issues`, `missingScreenshots`, `invalidImages`) y en `report.summary.integrityIssues`; la corrida **no** se aborta.
+- `GET /api/errors/images` devuelve `items` unificados (reportes + carpeta) con los campos anteriores más `id`, `kind` (`image`\|`video`\|`trace`\|`context`), `source` (`report`\|`folder`), `displayName`, `mtime`, `timestamp`, `size`, `reportId`, `reportTimestamp`, `testId`, `url` y `downloadUrl`. La vista legacy `images` y `counts` se mantienen.
+- La carpeta configurada en `errorImagesPath` recibe todas las capturas publicadas junto con un manifiesto `.runlab-evidence.json` (`version`, `items` por nombre de archivo) que aporta `status`, `evidenceSource`, `captureName` y dimensiones a los ítems `source: 'folder'`. Los reportes anteriores al cambio no tienen manifiesto y siguen mostrándose con metadato nulo.
+
+#### Defaults, nombres y rollback
+
+| Concepto | Contrato |
+|----------|----------|
+| Defaults | `EVIDENCE_ENV_DEFAULTS`: `RUNLAB_SCREENSHOT_FORMAT=png`, `RUNLAB_SCREENSHOT_QUALITY=90`, `RUNLAB_SCREENSHOT_SCALE=css`, `RUNLAB_SCREENSHOT_TIMEOUT=30000`. El perfil gana sobre variables genéricas del entorno; la calidad solo se aplica a JPEG. |
+| Nombre de captura | El kit produce `screenshot-<paso>` y lo declara con `expected-screenshot`. Un adjunto `body`-only se escribe como `<runAssetsDir>/attachments/screenshot-<paso>.<ext>` (con `-2`, `-3`, … si colisiona) y se le asigna `assetPath`. |
+| Nombre publicado | En `errorImagesPath` cada archivo se nombra `<reportId>__<testId>__<NN>.<ext>`; `.runlab-evidence.json` conserva `status`, `evidenceSource`, `captureName`, `contentType`, `assetPath` y dimensiones por nombre de archivo. |
+| Integridad | `report.integrity` y `summary.integrityIssues` señalan capturas declaradas sin adjunto e imágenes con bytes inválidos; la corrida no se aborta. |
+| Rollback | Revertir este repo: `services/playwrightRunner.js`, `routes/config.js`, `routes/errors.js`, `swagger.js`, `README.md` y sus tests. La API anterior publica solo fallos, pero los reportes generados con el esquema nuevo siguen legibles: la UI ignora campos adicionales y los adjuntos con `assetPath` funcionan igual. No hay migración de datos; conservar `profiles/`, assets y manifiestos. |
+
+Los mismos defaults y contrato de nombres se documentan en
+`../../playwright-kit-profesional/README.md` y
+`../runlab-agrimpex-ui/README.md`; los tres repos se despliegan y revierten de
+forma independiente.
 
 ### A.5 Estructura de datos por perfil (mapa)
 

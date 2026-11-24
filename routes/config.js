@@ -258,6 +258,15 @@ router.post('/', (req, res) => {
       video: ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.video) ? evidence.video : (prevEvidence && prevEvidence.video),
       trace: ['on', 'off', 'retain-on-failure', 'on-first-retry'].includes(evidence.trace) ? evidence.trace : (prevEvidence && prevEvidence.trace),
       fullPage: typeof evidence.fullPage === 'boolean' ? evidence.fullPage : (prevEvidence && typeof prevEvidence.fullPage === 'boolean' ? prevEvidence.fullPage : undefined),
+      imageFormat: ['png', 'jpeg', 'jpg'].includes(String(evidence.imageFormat || '').toLowerCase())
+        ? String(evidence.imageFormat).toLowerCase()
+        : (prevEvidence && prevEvidence.imageFormat),
+      imageQuality: Number.isInteger(Number(evidence.imageQuality)) && Number(evidence.imageQuality) >= 1 && Number(evidence.imageQuality) <= 100
+        ? Number(evidence.imageQuality)
+        : (prevEvidence && prevEvidence.imageQuality),
+      scale: ['css', 'device'].includes(String(evidence.scale || '').toLowerCase())
+        ? String(evidence.scale).toLowerCase()
+        : (prevEvidence && prevEvidence.scale),
     } : (evidence === null ? undefined : prevEvidence);
 
     // Remove undefined keys from evidence

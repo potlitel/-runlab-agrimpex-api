@@ -111,6 +111,7 @@ const spec = {
           seleniumRemoteUrl: { type: 'string' },
           errorImagesPath: { type: 'string' },
           jsonDataPath: { type: 'string' },
+          evidence: { $ref: '#/components/schemas/EvidenceConfig' },
           projectFeatures: {
             type: 'object',
             properties: {
@@ -126,6 +127,96 @@ const spec = {
           },
         },
         additionalProperties: true,
+      },
+      EvidenceConfig: {
+        type: 'object',
+        description: 'Perfil de evidencia inyectado al kit Playwright (RUNLAB_SCREENSHOT_*).',
+        properties: {
+          screenshot: { type: 'string', enum: ['always', 'only-on-failure', 'off'] },
+          video: { type: 'string', enum: ['on', 'off', 'retain-on-failure', 'on-first-retry'] },
+          trace: { type: 'string', enum: ['on', 'off', 'retain-on-failure', 'on-first-retry'] },
+          fullPage: { type: 'boolean' },
+          imageFormat: { type: 'string', enum: ['png', 'jpeg', 'jpg'], default: 'png' },
+          imageQuality: { type: 'integer', minimum: 1, maximum: 100, default: 90 },
+          scale: { type: 'string', enum: ['css', 'device'], default: 'css' },
+        },
+        additionalProperties: true,
+      },
+      EvidenceItem: {
+        type: 'object',
+        description: 'Evidencia publicada por un reporte o por la carpeta de errores.',
+        required: ['id', 'name', 'kind', 'source', 'url'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          displayName: { type: 'string' },
+          kind: { type: 'string', enum: ['image', 'video', 'trace', 'context', 'other'] },
+          source: { type: 'string', enum: ['report', 'folder'] },
+          mtime: { type: 'integer', nullable: true },
+          timestamp: { type: 'string', nullable: true },
+          size: { type: 'integer', nullable: true },
+          reportId: { type: 'string', nullable: true },
+          reportTimestamp: { type: 'string', nullable: true },
+          testId: { type: 'string', nullable: true },
+          status: { type: 'string', enum: ['passed', 'failed', 'error'], nullable: true },
+          evidenceSource: { type: 'string', enum: ['capture', 'failure-artifact'], nullable: true },
+          captureName: { type: 'string', nullable: true },
+          contentType: { type: 'string', nullable: true },
+          assetPath: { type: 'string', nullable: true },
+          width: { type: 'integer', nullable: true },
+          height: { type: 'integer', nullable: true },
+          url: { type: 'string' },
+          downloadUrl: { type: 'string' },
+        },
+      },
+      EvidenceGalleryResponse: {
+        type: 'object',
+        properties: {
+          configured: { type: 'boolean' },
+          folder: { type: 'string' },
+          folderMissing: { type: 'boolean' },
+          images: {
+            type: 'array',
+            description: 'Compatibilidad con la vista legacy de imágenes de carpeta.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                mtime: { type: 'integer' },
+                size: { type: 'integer' },
+              },
+            },
+          },
+          items: { type: 'array', items: { $ref: '#/components/schemas/EvidenceItem' } },
+          counts: {
+            type: 'object',
+            properties: {
+              total: { type: 'integer' },
+              folder: { type: 'integer' },
+              reports: { type: 'integer' },
+            },
+          },
+        },
+      },
+      EvidenceIntegrity: {
+        type: 'object',
+        description: 'Incidencias de capturas declaradas y no generadas o imágenes inválidas.',
+        properties: {
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['missing-screenshot', 'invalid-image'] },
+                testId: { type: 'string', nullable: true },
+                name: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
+          },
+          missingScreenshots: { type: 'array', items: { type: 'object' } },
+          invalidImages: { type: 'array', items: { type: 'object' } },
+        },
       },
       TestCollection: {
         type: 'object',
@@ -569,7 +660,18 @@ const spec = {
     },
 
     '/api/errors/images': {
-      get: { tags: ['Errors'], summary: 'Listar imágenes de error', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }], responses: { 200: { description: 'Imágenes' } } },
+      get: {
+        tags: ['Errors'],
+        summary: 'Listar evidencias publicadas (capturas de tests pasados/fallidos y artefactos de fallo)',
+        description: 'Une adjuntos de reportes con la carpeta configurada en errorImagesPath. Los campos status, evidenceSource, captureName, width y height pueden ser null en evidencia legacy.',
+        parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }],
+        responses: {
+          200: {
+            description: 'Galería de evidencias',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/EvidenceGalleryResponse' } } },
+          },
+        },
+      },
     },
     '/api/errors/image': {
       get: { tags: ['Errors'], summary: 'Obtener imagen de error', parameters: [{ $ref: '#/components/parameters/ProfileIdHeader' }, { name: 'path', in: 'query', schema: { type: 'string' } }], responses: { 200: { description: 'Imagen/binario' }, 404: { description: 'No encontrada' } } },
