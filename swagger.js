@@ -139,12 +139,23 @@ const spec = {
           message: { type: 'string' },
         },
       },
+      ProfileAvatar: {
+        type: 'object',
+        description: 'Avatar generado en la UI; el backend persiste style y seed, nunca la imagen.',
+        required: ['style', 'seed'],
+        properties: {
+          style: { type: 'string', enum: ['notionists', 'lorelei', 'micah', 'bottts'] },
+          seed: { type: 'string', minLength: 1, maxLength: 64 },
+        },
+      },
       Profile: {
         type: 'object',
+        required: ['id', 'name', 'createdAt', 'avatar'],
         properties: {
           id: { type: 'string' },
           name: { type: 'string' },
           createdAt: { type: 'string' },
+          avatar: { $ref: '#/components/schemas/ProfileAvatar' },
         },
         additionalProperties: true,
       },
@@ -340,7 +351,8 @@ const spec = {
       },
       post: {
         tags: ['Profile Admin'],
-        summary: 'Crear perfil',
+        summary: 'Crear perfil (avatar obligatorio)',
+        description: 'BREAKING: sin `avatar` válido responde 400. El avatar se persiste con el perfil.',
         security: [],
         requestBody: {
           required: true,
@@ -348,15 +360,19 @@ const spec = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['name'],
-                properties: { name: { type: 'string' } },
+                required: ['name', 'avatar'],
+                properties: {
+                  name: { type: 'string' },
+                  avatar: { $ref: '#/components/schemas/ProfileAvatar' },
+                  testDataSource: { type: 'string', description: 'Modo de datos de prueba (opcional)' },
+                },
               },
             },
           },
         },
         responses: {
           200: { description: 'Perfil creado', content: { 'application/json': { schema: { $ref: '#/components/schemas/Profile' } } } },
-          400: { description: 'Solicitud inválida', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          400: { description: 'Falta `name` o `avatar`, o el avatar es inválido', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
         },
       },
     },
@@ -381,17 +397,28 @@ const spec = {
       post: {
         tags: ['Profile Admin'],
         summary: 'Duplicar perfil',
+        description: 'Sin `avatar` explícito, el duplicado hereda el avatar del perfil de origen.',
         security: [],
         parameters: [{ $ref: '#/components/parameters/ProfileIdPath' }],
         requestBody: {
           required: true,
           content: {
             'application/json': {
-              schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } },
+              schema: {
+                type: 'object',
+                required: ['name'],
+                properties: {
+                  name: { type: 'string' },
+                  avatar: { $ref: '#/components/schemas/ProfileAvatar' },
+                },
+              },
             },
           },
         },
-        responses: { 200: { description: 'Perfil duplicado' }, 400: { description: 'Error' } },
+        responses: {
+          200: { description: 'Perfil duplicado', content: { 'application/json': { schema: { $ref: '#/components/schemas/Profile' } } } },
+          400: { description: 'Error de validación o perfil no encontrado', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
       },
     },
     '/api/profile-admin/{id}/activate': {
@@ -404,6 +431,33 @@ const spec = {
       },
     },
     '/api/profile-admin/{id}': {
+      patch: {
+        tags: ['Profile Admin'],
+        summary: 'Actualizar nombre y/o avatar del perfil',
+        description: 'Se requiere al menos `name` o `avatar`; la actualización del índice es atómica. `PATCH /{id}/rename` sigue disponible por compatibilidad y conserva el avatar.',
+        security: [],
+        parameters: [{ $ref: '#/components/parameters/ProfileIdPath' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                minProperties: 1,
+                properties: {
+                  name: { type: 'string', minLength: 1 },
+                  avatar: { $ref: '#/components/schemas/ProfileAvatar' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Perfil actualizado', content: { 'application/json': { schema: { $ref: '#/components/schemas/Profile' } } } },
+          400: { description: 'Validación fallida', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+          404: { description: 'Perfil no encontrado', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
       delete: {
         tags: ['Profile Admin'],
         summary: 'Eliminar perfil',

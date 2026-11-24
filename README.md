@@ -495,7 +495,18 @@ Workspace aislado para un proyecto/equipo de pruebas. Contiene configuración, e
 - **Identidad:** `id` (slug) y `name` (p.ej. `perfil-1`, "Perfil 1").
 - **Selección:** header `X-Profile-Id` en `/api/*` (excepto rutas de administración global de perfiles y sistema, montadas antes de `resolveProfile`).
 - **Aislamiento:** estado de ejecución, caché y eventos Socket.io por perfil; varios perfiles pueden operar sin pisarse.
-- **Gestión:** `services/profileManager.js`, rutas `/api/profile-admin` (listar/crear/renombrar/activar/duplicar/borrar).
+- **Gestión:** `services/profileManager.js`, rutas `/api/profile-admin` (listar/crear/actualizar/renombrar/activar/duplicar/borrar).
+
+#### Avatar del perfil (`profiles/index.json`)
+
+Cada entrada incluye `avatar: { "style": "...", "seed": "..." }`. El backend valida y persiste esos dos campos; la UI genera el SVG a partir de ellos (no se guardan imágenes ni data URIs).
+
+- **Estilos permitidos:** `notionists`, `lorelei`, `micah`, `bottts`.
+- **`seed`:** cadena no vacía de hasta 64 caracteres (se recorta whitespace).
+- **Alta:** `POST /api/profile-admin` exige `avatar` válido (**BREAKING**: sin él o con un estilo/seed inválido responde `400`).
+- **Actualización:** `PATCH /api/profile-admin/{id}` acepta `{ name?, avatar? }` de forma atómica; `PATCH /{id}/rename` sigue funcionando y conserva el avatar.
+- **Duplicado:** `POST /api/profile-admin/{id}/duplicate` hereda el avatar del origen salvo que se envíe otro válido.
+- **Perfiles heredados:** si una entrada antigua no tiene avatar, se expone `{ style: "notionists", seed: <id> }` de forma determinista y se escribe en el índice en la siguiente mutación.
 
 #### Ejemplos prácticos de perfiles
 

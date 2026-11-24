@@ -14,6 +14,35 @@ const DEFAULT_FEATURES = {
   errorImages: true, docker: true, schedules: true,
 };
 
+const AVATAR_STYLES = ['notionists', 'lorelei', 'micah', 'bottts'];
+const DEFAULT_AVATAR_STYLE = 'notionists';
+const AVATAR_SEED_MAX_LENGTH = 64;
+
+function validateAvatar(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('avatar requerido');
+  }
+  if (!AVATAR_STYLES.includes(value.style)) {
+    throw new Error('avatar.style inválido');
+  }
+  if (typeof value.seed !== 'string') {
+    throw new Error('avatar.seed inválido');
+  }
+  const seed = value.seed.trim();
+  if (!seed || seed.length > AVATAR_SEED_MAX_LENGTH) {
+    throw new Error('avatar.seed inválido');
+  }
+  return { style: value.style, seed };
+}
+
+function normalizeAvatar(value, fallbackSeed) {
+  try {
+    return validateAvatar(value);
+  } catch {
+    return { style: DEFAULT_AVATAR_STYLE, seed: String(fallbackSeed || 'perfil') };
+  }
+}
+
 function slugify(name) {
   return String(name || '')
     .trim()
@@ -25,7 +54,11 @@ function slugify(name) {
 
 function normalizeIndex(index) {
   const out = index && typeof index === 'object' ? { ...index } : {};
-  if (!Array.isArray(out.profiles)) out.profiles = [];
+  out.profiles = (Array.isArray(out.profiles) ? out.profiles : []).map((profile) =>
+    profile && typeof profile === 'object'
+      ? { ...profile, avatar: normalizeAvatar(profile.avatar, profile.id) }
+      : profile
+  );
   if (!('activeProfileId' in out)) out.activeProfileId = null;
   if (!('templateProfileId' in out)) out.templateProfileId = null;
   const td = out.testDataDefaults && typeof out.testDataDefaults === 'object' ? out.testDataDefaults : {};
@@ -216,27 +249,51 @@ function createProfile(name, options = {}) {
   seedProfileFiles(paths);
   applyTestDataPathsToProfile(paths, testDataPaths);
 
-  const entry = { id, name: name.trim() || id, createdAt: new Date().toISOString() };
+  const avatar = options.avatar !== undefined
+    ? validateAvatar(options.avatar)
+    : normalizeAvatar(null, id);
+  const entry = { id, name: name.trim() || id, createdAt: new Date().toISOString(), avatar };
   index.profiles.push(entry);
   if (!index.activeProfileId) index.activeProfileId = id;
   writeIndex(index);
   return entry;
 }
 
-function renameProfile(id, newName) {
+function updateProfile(id, patch = {}) {
   const index = readIndex();
   const entry = index.profiles.find(p => p.id === id);
   if (!entry) throw new Error('Perfil no encontrado');
-  entry.name = newName.trim();
+
+  const hasName = Object.prototype.hasOwnProperty.call(patch, 'name');
+  const hasAvatar = Object.prototype.hasOwnProperty.call(patch, 'avatar');
+  if (!hasName && !hasAvatar) throw new Error('name o avatar requeridos');
+
+  if (hasName) {
+    const name = typeof patch.name === 'string' ? patch.name.trim() : '';
+    if (!name) throw new Error('name requerido');
+    entry.name = name;
+  }
+  if (hasAvatar) entry.avatar = validateAvatar(patch.avatar);
+
   writeIndex(index);
+  return { ...entry };
+}
+
+function renameProfile(id, newName) {
+  updateProfile(id, { name: newName });
 }
 
 function copyFileIfExists(src, dst) {
   if (fs.existsSync(src)) fs.copyFileSync(src, dst);
 }
 
-function duplicateProfile(id, newName) {
-  if (!profileExists(id)) throw new Error('Perfil no encontrado');
+function duplicateProfile(id, newName, options = {}) {
+  const index = readIndex();
+  const source = index.profiles.find(p => p.id === id);
+  if (!source) throw new Error('Perfil no encontrado');
+  const avatar = options.avatar !== undefined
+    ? validateAvatar(options.avatar)
+    : normalizeAvatar(source.avatar, id);
   const src = profilePaths(id);
   const dstId = uniqueId(slugify(newName));
   const dst = profilePaths(dstId);
@@ -246,8 +303,7 @@ function duplicateProfile(id, newName) {
   for (const key of ['config', 'automationConfig', 'features', 'entornos', 'schedules']) {
     copyFileIfExists(src[key], dst[key]);
   }
-  const index = readIndex();
-  const entry = { id: dstId, name: newName.trim() || dstId, createdAt: new Date().toISOString() };
+  const entry = { id: dstId, name: newName.trim() || dstId, createdAt: new Date().toISOString(), avatar };
   index.profiles.push(entry);
   writeIndex(index);
   return entry;
@@ -282,9 +338,10 @@ function getEntorno(entornosPath, name) {
 
 module.exports = {
   DATA_DIR, PROFILES_DIR, INDEX_PATH, DEFAULT_CONFIG, DEFAULT_FEATURES,
+  AVATAR_STYLES, DEFAULT_AVATAR_STYLE, validateAvatar, normalizeAvatar,
   slugify, readIndex, writeIndex, listProfiles, profileExists,
   getActiveProfileId, setActiveProfileId, profilePaths, resolveProfile,
-  seedProfileFiles, createProfile, renameProfile, duplicateProfile, deleteProfile,
+  seedProfileFiles, createProfile, updateProfile, renameProfile, duplicateProfile, deleteProfile,
   getProfileSettings, updateProfileSettings,
   readEntornos, writeEntornos, getEntorno,
 };

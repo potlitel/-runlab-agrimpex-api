@@ -53,10 +53,55 @@ test('createProfile: crea dir + archivos + entrada de indice', () => {
   assert.ok(pm.profileExists('perfil-1'));
 });
 
+test('createProfile: persiste el avatar enviado', () => {
+  const { pm } = load({ activeProfileId: null, profiles: [] });
+  const avatar = { style: 'bottts', seed: 'semilla-1' };
+  const p = pm.createProfile('Perfil 1', { avatar });
+  assert.deepStrictEqual(p.avatar, avatar);
+  assert.deepStrictEqual(pm.listProfiles()[0].avatar, avatar);
+});
+
+test('updateProfile: actualiza nombre y avatar de forma atómica', () => {
+  const { pm } = load({ activeProfileId: null, profiles: [] });
+  const p = pm.createProfile('Perfil 1', { avatar: { style: 'notionists', seed: 'a' } });
+  const avatar = { style: 'lorelei', seed: 'b' };
+  const updated = pm.updateProfile(p.id, { name: 'Renombrado', avatar });
+  assert.strictEqual(updated.name, 'Renombrado');
+  assert.deepStrictEqual(updated.avatar, avatar);
+  assert.deepStrictEqual(pm.listProfiles()[0], updated);
+  assert.throws(() => pm.updateProfile(p.id, {}), /name o avatar requeridos/);
+  assert.throws(() => pm.updateProfile(p.id, { avatar: { style: 'x', seed: 'a' } }), /avatar\.style inválido/);
+});
+
+test('renameProfile: conserva el avatar', () => {
+  const { pm } = load({ activeProfileId: null, profiles: [] });
+  const p = pm.createProfile('Perfil 1', { avatar: { style: 'micah', seed: 'm' } });
+  pm.renameProfile(p.id, 'Nuevo nombre');
+  const stored = pm.listProfiles()[0];
+  assert.strictEqual(stored.name, 'Nuevo nombre');
+  assert.deepStrictEqual(stored.avatar, { style: 'micah', seed: 'm' });
+});
+
 test('createProfile: id colisionado se sufija', () => {
   const { pm } = load({ activeProfileId: 'perfil-1', profiles: [{ id: 'perfil-1', name: 'Perfil 1', createdAt: 'x' }] });
   const p = pm.createProfile('Perfil 1');
   assert.strictEqual(p.id, 'perfil-1-2');
+});
+
+test('duplicateProfile: hereda el avatar o aplica un override válido', () => {
+  const { pm } = load({ activeProfileId: null, profiles: [] });
+  const origin = pm.createProfile('Origen', { avatar: { style: 'bottts', seed: 'origen' } });
+  const copy = pm.duplicateProfile(origin.id, 'Copia');
+  assert.deepStrictEqual(copy.avatar, { style: 'bottts', seed: 'origen' });
+  assert.deepStrictEqual(pm.listProfiles().find(p => p.id === origin.id).avatar, copy.avatar);
+  const override = pm.duplicateProfile(origin.id, 'Copia 2', {
+    avatar: { style: 'lorelei', seed: 'otra' },
+  });
+  assert.deepStrictEqual(override.avatar, { style: 'lorelei', seed: 'otra' });
+  assert.throws(
+    () => pm.duplicateProfile(origin.id, 'Copia 3', { avatar: { style: 'x', seed: 'a' } }),
+    /avatar\.style inválido/
+  );
 });
 
 test('duplicateProfile: copia config pero no reports', () => {
@@ -79,6 +124,35 @@ test('deleteProfile: reasigna activo', () => {
   pm.deleteProfile('uno');
   assert.ok(!pm.profileExists('uno'));
   assert.strictEqual(pm.getActiveProfileId(), 'dos');
+});
+
+test('normalizeIndex: fallback determinista se expone y se persiste al mutar', () => {
+  const { pm } = load({ activeProfileId: 'perfil-1', profiles: [{ id: 'perfil-1', name: 'Perfil 1' }] });
+  const first = pm.getProfileSettings().profiles[0].avatar;
+  const second = pm.getProfileSettings().profiles[0].avatar;
+  assert.deepStrictEqual(first, { style: 'notionists', seed: 'perfil-1' });
+  assert.deepStrictEqual(second, first);
+  pm.setActiveProfileId('perfil-1');
+  const stored = JSON.parse(fs.readFileSync(pm.INDEX_PATH, 'utf-8'));
+  assert.deepStrictEqual(stored.profiles[0].avatar, first);
+});
+
+test('validateAvatar: valida estilo y seed, normalizeAvatar usa fallback', () => {
+  const { pm } = load();
+  assert.deepStrictEqual(
+    pm.validateAvatar({ style: 'notionists', seed: ' perfil-1 ' }),
+    { style: 'notionists', seed: 'perfil-1' }
+  );
+  assert.throws(() => pm.validateAvatar(), /avatar requerido/);
+  assert.throws(() => pm.validateAvatar({ style: 'otro', seed: 'x' }), /avatar\.style inválido/);
+  assert.throws(() => pm.validateAvatar({ style: 'notionists', seed: '' }), /avatar\.seed inválido/);
+  assert.throws(() => pm.validateAvatar({ style: 'notionists', seed: 123 }), /avatar\.seed inválido/);
+  assert.throws(() => pm.validateAvatar({ style: 'notionists', seed: 'x'.repeat(65) }), /avatar\.seed inválido/);
+  assert.deepStrictEqual(pm.normalizeAvatar(null, 'perfil-1'), { style: 'notionists', seed: 'perfil-1' });
+  assert.deepStrictEqual(
+    pm.normalizeAvatar({ style: 'bottts', seed: 'abc' }, 'perfil-1'),
+    { style: 'bottts', seed: 'abc' }
+  );
 });
 
 test('entornos: read/write/get por path', () => {
